@@ -14,7 +14,12 @@ INCIDENTS = os.environ["INCIDENTS_TABLE"]
 
 def handler(event, context):
     incident_id = event.get("incident_id", "unknown")
-    error = event.get("error", {})
+    # Either a caught exception from a spine state, or NotifyDecision found that
+    # nobody in the tier was reached and routed here without one.
+    error = event.get("error") or {
+        "Error": "TierReachedNobody",
+        "Cause": f"tier {event.get('tier_index')} paged {len(event.get('contacts', []))} people; none reached",
+    }
     reason = json.dumps(error)[:900]
 
     if incident_id != "unknown":

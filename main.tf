@@ -30,9 +30,10 @@ locals {
   # handler name -> file under lambdas/. Each becomes one function.
   functions = {
     create_incident = "create_incident"
+    select_tier     = "select_tier"
+    notify          = "notify"
     check_claim     = "check_claim"
     record_failure  = "record_failure"
-    web             = "web"
   }
 
   # Named here rather than read from the resource so the web function can start
@@ -138,11 +139,13 @@ locals {
 
 # --- Lambda ------------------------------------------------------------------
 
+# One zip of the whole handlers directory, shared by every function, so
+# handlers can import templates.py. A change to any file redeploys all of them.
 data "archive_file" "lambdas" {
-  for_each    = local.functions
   type        = "zip"
-  source_file = "${path.module}/lambdas/${each.value}.py"
-  output_path = "${path.module}/.build/${each.key}.zip"
+  source_dir  = "${path.module}/lambdas"
+  output_path = "${path.module}/.build/lambdas.zip"
+  excludes    = ["__pycache__"]
 }
 
 data "aws_iam_policy_document" "lambda_assume" {
@@ -185,6 +188,11 @@ data "aws_iam_policy_document" "lambda" {
   }
 
   statement {
+    actions   = ["ses:SendEmail", "ses:SendRawEmail"]
+    resources = ["arn:aws:ses:${var.region}:${data.aws_caller_identity.current.account_id}:identity/${var.sender_domain}"]
+  }
+
+  statement {
     actions   = ["cloudwatch:PutMetricData"]
     resources = ["*"]
     condition {
@@ -203,7 +211,7 @@ resource "aws_iam_role_policy" "lambda" {
 
 # Declared explicitly so retention is set. Lambda's auto-created group never expires.
 resource "aws_cloudwatch_log_group" "lambda" {
-  for_each          = local.functions
+  for_each          = merge(local.functions, { web = "web" })
   name              = "/aws/lambda/${var.prefix}-${replace(each.key, "_", "-")}"
   retention_in_days = 7
 }
@@ -217,21 +225,47 @@ resource "aws_lambda_function" "fn" {
   runtime          = "python3.13"
   architectures    = ["arm64"]
   timeout          = 10
-  filename         = data.archive_file.lambdas[each.key].output_path
-  source_code_hash = data.archive_file.lambdas[each.key].output_base64sha256
+  filename         = data.archive_file.lambdas.output_path
+  source_code_hash = data.archive_file.lambdas.output_base64sha256
 
   environment {
-    variables = {
-      INCIDENTS_TABLE      = aws_dynamodb_table.incidents.name
-      SUBJECTS_TABLE       = aws_dynamodb_table.subjects.name
-      CONTACTS_TABLE       = aws_dynamodb_table.contacts.name
-      NOTIFICATIONS_TABLE  = aws_dynamodb_table.notifications.name
-      RESPONSE_STATS_TABLE = aws_dynamodb_table.response_stats.name
-      STATE_MACHINE_ARN    = local.state_machine_arn
-      SUBJECT_ID           = var.subject_id
-      WAIT_S               = tostring(var.wait_s)
-      MAX_TIER             = tostring(var.max_tier)
-    }
+    variables = merge(local.lambda_env, {
+      BASE_URL = aws_lambda_function_url.web.function_url
+    })
+  }
+
+  depends_on = [aws_cloudwatch_log_group.lambda]
+}
+
+locals {
+  lambda_env = {
+    INCIDENTS_TABLE      = aws_dynamodb_table.incidents.name
+    SUBJECTS_TABLE       = aws_dynamodb_table.subjects.name
+    CONTACTS_TABLE       = aws_dynamodb_table.contacts.name
+    NOTIFICATIONS_TABLE  = aws_dynamodb_table.notifications.name
+    RESPONSE_STATS_TABLE = aws_dynamodb_table.response_stats.name
+    STATE_MACHINE_ARN    = local.state_machine_arn
+    SUBJECT_ID           = var.subject_id
+    SENDER               = var.sender
+    WAIT_S               = tostring(var.wait_s)
+    MAX_TIER             = tostring(var.max_tier)
+  }
+}
+
+# The web function is declared on its own: the fan-out functions need its URL
+# for the links in their emails, and a function cannot depend on its own URL.
+resource "aws_lambda_function" "web" {
+  function_name    = "${var.prefix}-web"
+  role             = aws_iam_role.lambda.arn
+  handler          = "web.handler"
+  runtime          = "python3.13"
+  architectures    = ["arm64"]
+  timeout          = 10
+  filename         = data.archive_file.lambdas.output_path
+  source_code_hash = data.archive_file.lambdas.output_base64sha256
+
+  environment {
+    variables = local.lambda_env
   }
 
   depends_on = [aws_cloudwatch_log_group.lambda]
@@ -239,7 +273,7 @@ resource "aws_lambda_function" "fn" {
 
 # The one public origin. Everything the subject or a responder touches is served here.
 resource "aws_lambda_function_url" "web" {
-  function_name      = aws_lambda_function.fn["web"].function_name
+  function_name      = aws_lambda_function.web.function_name
   authorization_type = "NONE"
 }
 
@@ -250,7 +284,7 @@ resource "aws_lambda_function_url" "web" {
 resource "aws_lambda_permission" "web_url_public_invoke" {
   statement_id             = "AllowPublicFunctionUrlInvoke"
   action                   = "lambda:InvokeFunction"
-  function_name            = aws_lambda_function.fn["web"].function_name
+  function_name            = aws_lambda_function.web.function_name
   principal                = "*"
   invoked_via_function_url = true
 }
@@ -323,7 +357,83 @@ resource "aws_sfn_state_machine" "escalation" {
         ResultPath = "$"
         Retry      = local.lambda_retry
         Catch      = local.spine_catch
-        Next       = "WaitForClaim"
+        Next       = "SelectTier"
+      }
+      SelectTier = {
+        Type       = "Task"
+        Resource   = aws_lambda_function.fn["select_tier"].arn
+        ResultPath = "$"
+        Retry      = local.lambda_retry
+        Catch      = local.spine_catch
+        Next       = "NotifyTier"
+      }
+      # Everyone in the tier is paged at the same moment. One failed send stays
+      # inside its own iteration; the Map as a whole cannot fail because of it.
+      NotifyTier = {
+        Type      = "Map"
+        ItemsPath = "$.contacts"
+        ItemSelector = {
+          "incident_id.$"     = "$.incident_id"
+          "tier.$"            = "$.tier_index"
+          "subject.$"         = "$.subject"
+          "started_at.$"      = "$.started_at"
+          "pressed_at.$"      = "$.pressed_at"
+          "contacted_count.$" = "$.contacted_count"
+          "contact.$"         = "$$.Map.Item.Value"
+        }
+        ItemProcessor = {
+          ProcessorConfig = { Mode = "INLINE" }
+          StartAt         = "NotifyOne"
+          States = {
+            NotifyOne = {
+              Type     = "Task"
+              Resource = aws_lambda_function.fn["notify"].arn
+              Retry = concat(local.lambda_retry, [{
+                ErrorEquals     = ["SesThrottled"]
+                IntervalSeconds = 1
+                MaxAttempts     = 4
+                BackoffRate     = 2
+              }])
+              Catch = [{
+                ErrorEquals = ["States.ALL"]
+                ResultPath  = "$.error"
+                Next        = "NotifyFailed"
+              }]
+              End = true
+            }
+            NotifyFailed = {
+              Type = "Pass"
+              Parameters = {
+                notified       = false
+                reason         = "crashed"
+                "contact_id.$" = "$.contact.contact_id"
+                "error.$"      = "$.error"
+              }
+              End = true
+            }
+          }
+        }
+        ResultPath = "$.notify_results"
+        Next       = "TallyNotified"
+      }
+      # A Choice cannot call an intrinsic, so the count is materialised first.
+      TallyNotified = {
+        Type = "Pass"
+        Parameters = {
+          "sent_count.$" = "States.ArrayLength($.notify_results[?(@.notified == true)])"
+        }
+        ResultPath = "$.tally"
+        Next       = "NotifyDecision"
+      }
+      # One unreachable person is a normal Tuesday. A tier that reached nobody is a
+      # broken escalation, and waiting a minute for a claim that cannot come is the
+      # silent failure this machine exists to refuse.
+      NotifyDecision = {
+        Type = "Choice"
+        Choices = [
+          { Variable = "$.tally.sent_count", NumericEquals = 0, Next = "RecordFailure" },
+        ]
+        Default = "WaitForClaim"
       }
       WaitForClaim = {
         Type        = "Wait"
@@ -389,4 +499,9 @@ output "incidents_table" {
 
 output "create_incident_fn" {
   value = aws_lambda_function.fn["create_incident"].function_name
+}
+
+moved {
+  from = aws_lambda_function.fn["web"]
+  to   = aws_lambda_function.web
 }

@@ -30,3 +30,14 @@ variable "max_tier" {
   type        = number
   default     = 3
 }
+
+variable "sender" {
+  description = "From header on every email. The domain must be a verified SES identity."
+  type        = string
+  default     = "Pukaar <alert@aryangorde.com>"
+}
+
+variable "sender_domain" {
+  type    = string
+  default = "aryangorde.com"
+}
