@@ -71,6 +71,10 @@ def main():
     print()
     print(f"Idle, per subject per month: {fmt(idle_per_subject_month())}. "
           f"Fixed, whole system: one KMS key, ${USD_PER_KMS_KEY_MONTH:.2f}/month.")
+    first = next(iter(SHAPES.values()))
+    thousand = 1000 * (sum(incident(first).values()) + idle_per_subject_month()) + USD_PER_KMS_KEY_MONTH
+    print(f"A thousand people, one incident each a month: about ${thousand:.0f}/month "
+          f"(₹{thousand * INR_PER_USD:.0f}).")
 
 
 if __name__ == "__main__":
