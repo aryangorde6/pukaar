@@ -1,27 +1,39 @@
 """The one public origin, behind a Lambda Function URL.
 
-    GET  /          the help button (the subject's page)
-    POST /trigger   press it: start an escalation, answer with its id
+    GET  /                the help button (the subject's page)
+    POST /trigger         press it: start an escalation, answer with its id
+    GET  /claim/{token}   the responder's page: who, where, and whether anyone has gone
+    POST /claim/{token}   "I'm going now" - one conditional write decides the race
 
-Later routes (claim, cancel, status) attach here. GET never writes.
+GET never writes. Mail clients and link scanners fetch every link in an email;
+if a GET could claim, a corporate proxy would be on its way to Sunita instead
+of Ravi.
 """
 
-import base64
+import hashlib
 import json
 import os
+import time
+import urllib.parse
 import uuid
+from datetime import datetime, timedelta, timezone
 from string import Template
 
 import boto3
+from botocore.exceptions import ClientError
 
 ddb = boto3.client("dynamodb")
 sfn = boto3.client("stepfunctions")
 
 CONTACTS = os.environ["CONTACTS_TABLE"]
+SUBJECTS = os.environ["SUBJECTS_TABLE"]
+INCIDENTS = os.environ["INCIDENTS_TABLE"]
+NOTIFICATIONS = os.environ["NOTIFICATIONS_TABLE"]
 STATE_MACHINE_ARN = os.environ["STATE_MACHINE_ARN"]
 SUBJECT_ID = os.environ["SUBJECT_ID"]
 WAIT_S = int(os.environ.get("WAIT_S", "60"))
 MAX_TIER = int(os.environ.get("MAX_TIER", "3"))
+IST = timezone(timedelta(hours=5, minutes=30))
 
 
 # --- routing ------------------------------------------------------------------
@@ -34,6 +46,9 @@ def handler(event, context):
         return html(200, trigger_page())
     if method == "POST" and path == "/trigger":
         return trigger()
+    if path.startswith("/claim/") and method in ("GET", "POST"):
+        token = path[len("/claim/"):]
+        return claim_page(token) if method == "GET" else claim(token)
     return html(404, NOT_FOUND)
 
 
@@ -66,6 +81,112 @@ def trigger():
     print(json.dumps({"component": "web", "event": "trigger", "incident_id": incident_id,
                       "execution_arn": started["executionArn"]}))
     return jsonr(200, {"incident_id": incident_id, "told": first_circle_names()})
+
+
+# --- claim --------------------------------------------------------------------
+
+def resolve(token):
+    """Token -> (notification row, incident row) or None. Never says which half was wrong."""
+    if not token or len(token) > 64:
+        return None
+    token_hash = hashlib.sha256(token.encode()).hexdigest()
+    rows = ddb.query(
+        TableName=NOTIFICATIONS,
+        IndexName="token_hash-index",
+        KeyConditionExpression="token_hash = :h",
+        ExpressionAttributeValues={":h": {"S": token_hash}},
+    )["Items"]
+    if len(rows) != 1:
+        return None
+    note = rows[0]
+    incident = ddb.get_item(TableName=INCIDENTS, Key={"incident_id": note["incident_id"]},
+                            ConsistentRead=True).get("Item")
+    if incident is None:
+        return None
+    return note, incident
+
+
+def claim_page(token):
+    found = resolve(token)
+    if found is None:
+        return html(404, BAD_LINK)
+    note, incident = found
+    return html(200, render_claim_state(note, incident))
+
+
+def claim(token):
+    found = resolve(token)
+    if found is None:
+        return html(404, BAD_LINK)
+    note, incident = found
+    contact = ddb.get_item(TableName=CONTACTS, Key={"subject_id": incident["subject_id"],
+                                                    "contact_id": note["contact_id"]})["Item"]
+    now = int(time.time())
+    try:
+        ddb.update_item(
+            TableName=INCIDENTS,
+            Key={"incident_id": incident["incident_id"]},
+            UpdateExpression="SET #s = :claimed, claimed_by = :c, claimed_by_name = :n, claimed_at = :t",
+            # A late answer on an alert that widened to everyone is still a good answer.
+            ConditionExpression="#s IN (:open, :fallback)",
+            ExpressionAttributeNames={"#s": "status"},
+            ExpressionAttributeValues={
+                ":claimed": {"S": "CLAIMED"}, ":open": {"S": "OPEN"}, ":fallback": {"S": "FALLBACK"},
+                ":c": note["contact_id"], ":n": contact["name"], ":t": {"N": str(now)},
+            },
+        )
+        won = True
+    except ClientError as e:
+        if e.response["Error"]["Code"] != "ConditionalCheckFailedException":
+            raise
+        won = False
+    ddb.update_item(TableName=NOTIFICATIONS,
+                    Key={"incident_id": note["incident_id"], "contact_tier": note["contact_tier"]},
+                    UpdateExpression="SET responded_at = :t", ExpressionAttributeValues={":t": {"N": str(now)}})
+    print(json.dumps({"component": "web", "event": "claim", "incident_id": incident["incident_id"]["S"],
+                      "contact_id": note["contact_id"]["S"], "won": won}))
+    # Either way, show what is true now: the row after the write, not what we hoped.
+    incident = ddb.get_item(TableName=INCIDENTS, Key={"incident_id": incident["incident_id"]},
+                            ConsistentRead=True)["Item"]
+    return html(200, render_claim_state(note, incident))
+
+
+def render_claim_state(note, incident):
+    subject = ddb.get_item(TableName=SUBJECTS, Key={"subject_id": incident["subject_id"]})["Item"]
+    status = incident["status"]["S"]
+    name = escape(subject["name"]["S"])
+    address = subject["address"]["S"]
+    parts = address.split(", ")
+    ctx = {
+        "name": name,
+        "address_line1": escape(", ".join(parts[:2])),
+        "address_line2": escape(", ".join(parts[2:])),
+        "maps_url": "https://maps.google.com/?q=" + urllib.parse.quote(address),
+        "pressed_at": fmt_time(incident["started_at"]["N"]),
+    }
+    if status in ("OPEN", "FALLBACK"):
+        reached = ddb.query(TableName=NOTIFICATIONS, KeyConditionExpression="incident_id = :i",
+                            FilterExpression="delivered = :t",
+                            ExpressionAttributeValues={":i": incident["incident_id"], ":t": {"BOOL": True}})["Count"]
+        others = max(reached - 1, 0)
+        ctx["contacted_count"] = reached
+        ctx["others"] = f"{others} other{'s were' if others != 1 else ' was'} contacted too" if others else "you are the only one contacted"
+        return CLAIM_ACTIONABLE.substitute(ctx)
+    if status == "CLAIMED":
+        ctx["claimed_at"] = fmt_time(incident["claimed_at"]["N"])
+        if incident["claimed_by"]["S"] == note["contact_id"]["S"]:
+            return CLAIM_YOURS.substitute(ctx)
+        ctx["claimer"] = escape(incident["claimed_by_name"]["S"])
+        return CLAIM_TAKEN.substitute(ctx)
+    if status == "CANCELLED":
+        ctx["cancelled_at"] = fmt_time(incident["cancelled_at"]["N"])
+        return CLAIM_CANCELLED.substitute(ctx)
+    ctx["ended_at"] = fmt_time(incident.get("failed_at", incident.get("ended_at", incident["started_at"]))["N"])
+    return CLAIM_OVER.substitute(ctx)
+
+
+def fmt_time(epoch):
+    return datetime.fromtimestamp(int(epoch), IST).strftime("%-I:%M %p").lower()
 
 
 # --- data ---------------------------------------------------------------------
@@ -117,7 +238,7 @@ STYLE = """
   --emergency: #A4161A; --on-emergency: #FFFFFF; --emergency-active: #7F1113;
   --safe: #14532D; --safe-bg: #E4F2E8; --caution: #7A4106; --caution-bg: #FDF1E0; --over: #55504D;
   --text-xs: 16px; --text-sm: 18px; --text-base: 20px; --text-lg: 24px; --text-xl: 32px;
-  --text-2xl: 40px; --text-action: 44px;
+  --text-2xl: 40px; --text-3xl: 56px; --text-action: 44px;
   --space-3: 12px; --space-4: 16px; --space-6: 24px; --space-8: 32px; --space-12: 48px;
   --radius: 12px; --radius-btn: 20px; --target-min: 64px;
 }
@@ -147,6 +268,16 @@ p { margin: 0 0 var(--space-4); }
 .card-safe { background: var(--safe-bg); color: var(--safe); }
 .card-caution { background: var(--caution-bg); color: var(--caution); }
 .card-emergency { background: var(--surface); border: 3px solid var(--emergency); color: var(--emergency); }
+.banner { font-size: var(--text-3xl); line-height: 1.1; font-weight: 700; letter-spacing: 0.02em;
+  color: var(--emergency); margin: 0 0 var(--space-4); }
+.lead { font-size: var(--text-lg); margin-top: calc(-1 * var(--space-4)); }
+.address { font-size: var(--text-lg); line-height: 1.5; }
+.btn-inline { display: inline-block; width: auto; min-width: var(--target-min); margin-top: 0; text-decoration: none;
+  text-align: center; }
+.btn-claim { min-height: 96px; font-size: var(--text-xl); text-transform: none; letter-spacing: 0; }
+.card h1 { font-size: var(--text-xl); margin-bottom: var(--space-3); }
+.card p { margin: 0; }
+.card-over { background: var(--surface); border: 3px solid var(--border); color: var(--over); }
 .foot { margin-top: var(--space-12); font-size: var(--text-sm); color: var(--ink-muted); }
 .foot a { color: inherit; }
 [hidden] { display: none !important; }
@@ -209,6 +340,55 @@ PAGE = Template("""<!doctype html>
 </script>
 </body>
 </html>
+""")
+
+def _page(title, body):
+    return ("""<!doctype html><html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1"><meta name="robots" content="noindex">
+<title>""" + title + """</title><style>""" + STYLE + """</style></head><body>
+""" + body + """
+<p class="foot">Ambulance: <a href="tel:112">112</a></p>
+</body></html>""")
+
+
+CLAIM_ACTIONABLE = Template(_page("Emergency — $name needs help", """
+<p class="banner">EMERGENCY</p>
+<h1>$name</h1>
+<p class="lead">pressed her help button at <strong>$pressed_at</strong></p>
+<p class="address"><strong>$address_line1</strong><br>$address_line2</p>
+<p><a class="btn btn-secondary btn-inline" href="$maps_url" target="_blank" rel="noopener">Open in maps</a></p>
+<p>You are one of <strong>$contacted_count people</strong> contacted.<br><strong>No one has gone yet.</strong></p>
+<form method="post"><button class="btn btn-emergency btn-claim" type="submit">I'm going now</button></form>
+<p class="muted">Can't go? That's alright — $others.</p>
+"""))
+
+CLAIM_YOURS = Template(_page("You're going", """
+<div class="card card-safe"><h1>&#10003; You're going</h1>
+<p>$name has been told you're coming.<br>Everyone else contacted has been told as well.</p></div>
+<p class="address"><strong>$address_line1</strong><br>$address_line2</p>
+<p><a class="btn btn-secondary btn-inline" href="$maps_url" target="_blank" rel="noopener">Open in maps</a></p>
+"""))
+
+CLAIM_TAKEN = Template(_page("$claimer is already on the way", """
+<div class="card card-safe"><h1>&#10003; $claimer is already on the way</h1>
+<p>They said they were going at <strong>$claimed_at</strong>.<br>Nothing more is needed.</p></div>
+<p class="muted">Thank you for opening this.</p>
+"""))
+
+CLAIM_CANCELLED = Template(_page("$name cancelled this alert", """
+<div class="card card-caution"><h1>&#8856; $name cancelled this alert</h1>
+<p>She marked it a false alarm at <strong>$cancelled_at</strong>.<br>Nothing is needed.</p></div>
+"""))
+
+CLAIM_OVER = Template(_page("This alert is over", """
+<div class="card card-over"><h1>This alert is over</h1>
+<p>It ended at <strong>$ended_at</strong>. Nothing is needed.</p></div>
+"""))
+
+BAD_LINK = _page("This link isn't valid", """
+<h1>This link isn't valid</h1>
+<p>It may have been mistyped, or it belongs to an alert that has ended.</p>
+<p><strong>If you think someone needs help, call 112.</strong></p>
 """)
 
 NOT_FOUND = """<!doctype html><html lang="en"><head><meta charset="utf-8">
