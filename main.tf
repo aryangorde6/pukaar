@@ -188,6 +188,12 @@ data "aws_iam_policy_document" "lambda" {
     resources = [local.state_machine_arn]
   }
 
+  # Waking the parked machine. SendTaskSuccess has no resource-level scope.
+  statement {
+    actions   = ["states:SendTaskSuccess"]
+    resources = ["*"]
+  }
+
   statement {
     actions   = ["ses:SendEmail", "ses:SendRawEmail"]
     resources = ["arn:aws:ses:${var.region}:${data.aws_caller_identity.current.account_id}:identity/${var.sender_domain}"]
@@ -311,6 +317,10 @@ data "aws_iam_policy_document" "sfn" {
   statement {
     actions   = ["lambda:InvokeFunction"]
     resources = [for f in aws_lambda_function.fn : f.arn]
+  }
+  statement {
+    actions   = ["dynamodb:UpdateItem"]
+    resources = [aws_dynamodb_table.incidents.arn]
   }
 }
 
@@ -436,10 +446,35 @@ resource "aws_sfn_state_machine" "escalation" {
         ]
         Default = "WaitForClaim"
       }
+      # Not a timer. The machine parks its task token on the incident row and
+      # sleeps until a claim or a cancel hands it back, or the tier timeout
+      # fires. Either way the next state reads the row - the token only wakes
+      # the machine early, it never decides anything.
       WaitForClaim = {
-        Type        = "Wait"
-        SecondsPath = "$.wait_s"
-        Next        = "CheckClaim"
+        Type     = "Task"
+        Resource = "arn:aws:states:::aws-sdk:dynamodb:updateItem.waitForTaskToken"
+        Parameters = {
+          TableName                = aws_dynamodb_table.incidents.name
+          Key                      = { incident_id = { "S.$" = "$.incident_id" } }
+          UpdateExpression         = "SET task_token = :t, token_set_at = :n"
+          ConditionExpression      = "#s = :open"
+          ExpressionAttributeNames = { "#s" = "status" }
+          ExpressionAttributeValues = {
+            ":t"    = { "S.$" = "$$.Task.Token" }
+            ":n"    = { "S.$" = "$$.State.EnteredTime" }
+            ":open" = { S = "OPEN" }
+          }
+        }
+        TimeoutSecondsPath = "$.wait_s"
+        ResultPath         = "$.wake"
+        Catch = concat([{
+          # Timeout: nobody answered in time. Condition failed: it was claimed or
+          # cancelled before the token could even be written. Both: go and look.
+          ErrorEquals = ["States.Timeout", "DynamoDb.ConditionalCheckFailedException"]
+          ResultPath  = "$.wake"
+          Next        = "CheckClaim"
+        }], local.spine_catch)
+        Next = "CheckClaim"
       }
       CheckClaim = {
         Type       = "Task"

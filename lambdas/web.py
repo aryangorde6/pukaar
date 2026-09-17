@@ -68,19 +68,36 @@ def cancel(event):
         return jsonr(400, {"error": "incident_id required"})
     now = int(time.time())
     try:
-        ddb.update_item(
+        old = ddb.update_item(
             TableName=INCIDENTS, Key={"incident_id": {"S": incident_id}},
             UpdateExpression="SET #s = :c, cancelled_at = :t",
             ConditionExpression="#s IN (:open, :fallback)",
             ExpressionAttributeNames={"#s": "status"},
             ExpressionAttributeValues={":c": {"S": "CANCELLED"}, ":open": {"S": "OPEN"},
                                        ":fallback": {"S": "FALLBACK"}, ":t": {"N": str(now)}},
+            ReturnValues="ALL_OLD",
         )
     except ClientError as e:
         if e.response["Error"]["Code"] != "ConditionalCheckFailedException":
             raise
+    else:
+        wake(old["Attributes"], "cancelled")
     print(json.dumps({"component": "web", "event": "cancel", "incident_id": incident_id}))
     return status(incident_id)
+
+
+def wake(old_row, why):
+    """Hand the parked task token back so the machine reads the row now, not at the
+    tier boundary. Best-effort: a stale token means the machine already moved on."""
+    token = old_row.get("task_token", {}).get("S")
+    if not token:
+        return
+    try:
+        sfn.send_task_success(taskToken=token, output=json.dumps({"woken_by": why}))
+        print(json.dumps({"component": "web", "event": "woke", "why": why}))
+    except ClientError as e:
+        print(json.dumps({"component": "web", "event": "wake_skipped", "why": why,
+                          "error": e.response["Error"]["Code"]}))
 
 
 def status(incident_id):
@@ -169,7 +186,7 @@ def claim(token):
                                                     "contact_id": note["contact_id"]})["Item"]
     now = int(time.time())
     try:
-        ddb.update_item(
+        old = ddb.update_item(
             TableName=INCIDENTS,
             Key={"incident_id": incident["incident_id"]},
             UpdateExpression="SET #s = :claimed, claimed_by = :c, claimed_by_name = :n, claimed_at = :t",
@@ -180,8 +197,10 @@ def claim(token):
                 ":claimed": {"S": "CLAIMED"}, ":open": {"S": "OPEN"}, ":fallback": {"S": "FALLBACK"},
                 ":c": note["contact_id"], ":n": contact["name"], ":t": {"N": str(now)},
             },
+            ReturnValues="ALL_OLD",
         )
         won = True
+        wake(old["Attributes"], "claimed")
     except ClientError as e:
         if e.response["Error"]["Code"] != "ConditionalCheckFailedException":
             raise
