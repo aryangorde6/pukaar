@@ -77,3 +77,25 @@ Evidence:         Same test, after: cancel → `Cancelled` entered **1.0 s** lat
                   (`t27a-134849`: `TaskTimedOut States.Timeout` at +5.07 s, then `FinalFallback`). `./verify.sh`
                   6/6 (`v-135012-*`). The IAM it needed: `dynamodb:UpdateItem` on the machine's role,
                   `states:SendTaskSuccess` on the web function's.
+
+## 2026-09-17 18:00 IST — one ignored page erased five answered ones
+Tried:            Availability ranking. First version: use the response history for *this hour bucket* if
+                  the person has ever been paged in it, else their history at any hour, else a declared prior.
+Broke:            Nothing threw. The first live run after deploy (`931591413163`, 17:56, bucket `17#weekday`)
+                  paged Vaishali, Ravi and Anil and wrote one page each into `17#weekday`; Ravi claimed. The
+                  next run two minutes later (`v-175839-*`) chose tier 1 = `['ravi', 'sunil', 'prakash']`:
+                  Vaishali — seeded 5/5 at 2 pm, 40 m away — was now "0/1 this hour" and lost to two people
+                  with no history at all. `verify.sh` still said 8/8, because check 7 only asked that the
+                  nearest non-answerer stay out of tier 1.
+Wrong assumption: That evidence from the same hour is always better than evidence from any hour. One page is
+                  not evidence of anything; a cliff between "this hour" and "any hour" let a single unanswered
+                  page outrank a whole history. And a passing check that never asked whether the best answerer
+                  was paged is the 4.7b bug class again — a verdict from absent evidence.
+Fix:              6eb8ad0 — pooled counts with a prior worth two pages (one answered if usually home, half if not);
+                  this hour's pages count twice, so the hour matters without deciding alone. Check 7 now also
+                  requires the best seeded answerer in tier 1; `verify.sh` reseeds first, because the ranking
+                  learns from the checks' own unanswered pages. `test_one_unanswered_page_does_not_erase_history`.
+Evidence:         Same shape, after: 5/5 plus one ignored page this hour scores 0.661 against an unknown's 0.525
+                  (unit test). Live `v-180259-fanout`: tier 1 `['vaishali', 'ravi', 'anil']` vs nearest three
+                  `['meena', 'vaishali', 'anil']`; SelectTier's log line carries every score and its basis
+                  (`vaishali 0.775 "5/5 answered"` … `meena 0.223 "0/6 answered"`). `./verify.sh` 8/8.
