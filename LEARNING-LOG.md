@@ -117,3 +117,28 @@ Evidence:         Same incident, after: `{"status": "CANCELLED", ..., "cancelled
                   `broadcast` = `{"kind": "false_alarm", "told": ["vaishali", "anil", "ravi"]}`; Ravi's claim link
                   now renders "Sunita cancelled this alert" with no record. `./verify.sh` check 11, 11/11
                   (`v-182122-*`).
+
+## 2026-09-17 23:10 IST — reseeding before the checks protected the checks, not the button
+Tried:            The cold re-read of the README against the live stack, claim by claim. Line 23 quotes her
+                  screen: *"Vaishali, Ravi and Anil will be told straight away"*.
+Broke:            The live page read *"Vaishali, Anil and Ravi"* — same circle, Anil above Ravi. Earlier in the
+                  evening, twice, it had read *"Vaishali, Sunil and Ravi"*: Anil out altogether. Nothing
+                  threw; `verify.sh` was 11/11 twenty minutes before. `pukaar-response-stats` held the pages
+                  the last run had sent and nobody had answered: `ravi 22#weekday 5/0`, `anil 22#weekday 3/0`,
+                  plus the `verify` rows, next to the three seeded ones.
+Wrong assumption: That reseeding *before* a run was the whole fix (entry 18:00). It gives the checks a known
+                  history; it does nothing for what the checks leave behind. The ranking learns from every page
+                  and the checks' pages are the last thing written, so from the end of a run until the next
+                  reseed the live button — the thing a judge opens — ranked on test pages. The README quotes a
+                  sentence the button was not showing.
+Fix:              f6512d6 — `verify.sh` reseeds after the checks as well as before, whatever the exit code, so a
+                  run leaves the circle as seeded. Manual presses and screenshot incidents still leave their
+                  pages behind; the rule for those stays `./seed.sh` before every take and every idle look.
+                  The same commit fixes `verify.sh`'s header ("eight" checks; there are eleven), states the
+                  contrast floor as the computed minimum (7.28:1 → "7:1, the AAA line"), and notes in the
+                  README that the ranking table's scores are the off-hour ones and that a reseed deletes the
+                  counters written since.
+Evidence:         Before: `aws dynamodb scan --table-name pukaar-response-stats` → 11 rows, and `curl` of the
+                  Function URL → "Vaishali, Anil and Ravi will be told straight away". After `./verify.sh`
+                  (11/11, `v-230629-*`): the scan → exactly the three seeded rows (`vaishali 14#weekday 5/5`,
+                  `ravi 4/4`, `meena 0/6`); `curl` → "Vaishali, Ravi and Anil will be told straight away".
