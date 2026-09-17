@@ -363,7 +363,7 @@ STYLE = """
   --radius: 12px; --radius-btn: 20px; --target-min: 64px;
 }
 * { box-sizing: border-box; }
-html { background: var(--bg); color: var(--ink);
+html { background: var(--bg); color: var(--ink); color-scheme: only light;
   font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Noto Sans",
     "Noto Sans Devanagari", "Helvetica Neue", Arial, sans-serif;
   font-size: var(--text-base); line-height: 1.6; }
@@ -371,6 +371,8 @@ body { margin: 0; padding: var(--space-6); max-width: 36rem; margin-inline: auto
 @media (max-width: 360px) { body { padding: var(--space-4); } }
 h1 { font-size: var(--text-2xl); line-height: 1.2; font-weight: 700; margin: 0 0 var(--space-6); }
 h2 { font-size: var(--text-xl); line-height: 1.3; font-weight: 700; margin: 0 0 var(--space-4); }
+h1, h2 { text-wrap: balance; }
+#sent h1 { font-size: var(--text-xl); }
 p { margin: 0 0 var(--space-4); }
 .muted { color: var(--ink-muted); }
 .time { font-size: var(--text-xs); color: var(--ink-muted); }
@@ -382,6 +384,11 @@ p { margin: 0 0 var(--space-4); }
   background: var(--emergency); color: var(--on-emergency); }
 .btn-emergency:active { background: var(--emergency-active); }
 .btn-emergency[disabled] { background: var(--border); cursor: not-allowed; }
+.btn-secondary[disabled] { color: var(--ink-muted); cursor: not-allowed; }
+@media (hover: hover) {
+  .btn-emergency:hover:not([disabled]) { background: var(--emergency-active); }
+  .btn-secondary:hover:not([disabled]) { border-color: var(--ink); }
+}
 .btn-secondary { background: var(--surface); color: var(--ink); border: 3px solid var(--border);
   font-size: var(--text-lg); margin-top: var(--space-8); }
 .card { border-radius: var(--radius); padding: var(--space-6); margin-bottom: var(--space-6); }
@@ -405,6 +412,7 @@ a[href^="tel:"] { color: inherit; display: inline-block; min-height: 48px; line-
   margin: -14px calc(-1 * var(--space-3)); font-weight: 700; text-underline-offset: 4px; }
 a:focus-visible { outline: 4px solid var(--ink); outline-offset: 3px; border-radius: 6px; }
 [hidden] { display: none !important; }
+.sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
 """
 
 PAGE = Template("""<!doctype html>
@@ -412,10 +420,12 @@ PAGE = Template("""<!doctype html>
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="only light"><meta name="robots" content="noindex">
 <title>I need help</title>
 <style>""" + STYLE + """</style>
 </head>
 <body>
+<div class="sr-only" aria-live="assertive" id="announce"></div>
 
 <main id="idle">
   <h1>I NEED HELP</h1>
@@ -424,26 +434,27 @@ PAGE = Template("""<!doctype html>
 </main>
 
 <main id="sent" hidden>
-  <h2>Help is being called</h2>
+  <h1>Help is being called</h1>
   <p><strong id="sent-names"></strong> have been told.<br><span class="time" id="sent-time"></span></p>
-  <button class="btn btn-secondary" id="cancel">Cancel — I'm OK</button>
+  <p class="muted">Waiting for one of them to answer…</p>
+  <button class="btn btn-secondary" id="cancel">Cancel — I’m OK</button>
 </main>
 
 <main id="coming" hidden>
-  <div class="card card-safe"><h2>&#10003; <span id="coming-name"></span> is coming</h2>
+  <div class="card card-safe"><h1>&#10003; <span id="coming-name"></span> is coming</h1>
   <p>On the way now.<br><span class="time" id="coming-time"></span></p>
   <p id="coming-record" hidden><span id="coming-record-name"></span> has your medical notes.</p></div>
-  <button class="btn btn-secondary" id="cancel2">Cancel — I'm OK</button>
+  <button class="btn btn-secondary" id="cancel2">Cancel — I’m OK</button>
 </main>
 
 <main id="cancelled" hidden>
-  <div class="card card-caution"><h2>Cancelled</h2>
+  <div class="card card-caution"><h1>Cancelled</h1>
   <p>Everyone has been told it was a false alarm.</p></div>
   <button class="btn btn-emergency" id="again">I need help</button>
 </main>
 
 <main id="failed" hidden>
-  <div class="card card-emergency"><h2>&#9888; Couldn't send</h2></div>
+  <div class="card card-emergency"><h1>&#9888; Couldn’t send</h1></div>
   <button class="btn btn-emergency" id="retry">Try again</button>
   <p style="margin-top: var(--space-6)"><strong>Or call 112 now.</strong></p>
 </main>
@@ -454,8 +465,13 @@ PAGE = Template("""<!doctype html>
 (function () {
   var names = $names_json;
   var incident = null, poll = null;
+  var say = function (text) {
+    var a = document.getElementById("announce"); a.textContent = ""; setTimeout(function () { a.textContent = text; }, 50);
+  };
   var show = function (id) {
     ["idle", "sent", "failed", "coming", "cancelled"].forEach(function (s) { document.getElementById(s).hidden = (s !== id); });
+    if (id !== "idle") say(Array.prototype.map.call(document.querySelectorAll("#" + id + " h1, #" + id + " p:not([hidden])"),
+      function (e) { return e.innerText; }).join(" ").replace(/\\s+/g, " ").trim());
   };
   var stopPoll = function () { if (poll) { clearInterval(poll); poll = null; } };
   var check = function () {
@@ -470,20 +486,23 @@ PAGE = Template("""<!doctype html>
       } else if (s.status === "CANCELLED") { show("cancelled"); stopPoll(); }
     }).catch(function () {});
   };
-  var cancel = function () {
+  var cancel = function (ev) {
     if (!incident) return;
+    var btn = ev.currentTarget, label = btn.textContent;
+    btn.disabled = true; btn.textContent = "Cancelling…";
+    var restore = function () { btn.disabled = false; btn.textContent = label; };
     fetch("/cancel", { method: "POST", headers: { "content-type": "application/json" },
       body: JSON.stringify({ incident_id: incident }) })
       .then(function (r) { return r.json(); })
-      .then(function (s) { if (s.status === "CANCELLED") { show("cancelled"); stopPoll(); } else { check(); } })
-      .catch(function () {});
+      .then(function (s) { if (s.status === "CANCELLED") { show("cancelled"); stopPoll(); } else { check(); } restore(); })
+      .catch(restore);
   };
   var joinNames = function (n) {
     return n.length < 2 ? n.join("") : n.slice(0, -1).join(", ") + " and " + n[n.length - 1];
   };
   var press = function () {
     var btn = document.getElementById("press");
-    btn.disabled = true;
+    btn.disabled = true; btn.textContent = "Calling for help…";
     fetch("/trigger", { method: "POST" })
       .then(function (r) { if (!r.ok) throw new Error(r.status); return r.json(); })
       .then(function (data) {
@@ -494,7 +513,7 @@ PAGE = Template("""<!doctype html>
         show("sent");
         stopPoll(); poll = setInterval(check, 3000);
       })
-      .catch(function () { btn.disabled = false; show("failed"); });
+      .catch(function () { btn.disabled = false; btn.textContent = "I need help"; show("failed"); });
   };
   document.getElementById("press").addEventListener("click", press);
   document.getElementById("retry").addEventListener("click", function () { show("idle"); press(); });
@@ -512,9 +531,10 @@ PAGE = Template("""<!doctype html>
 def _page(title, body):
     return ("""<!doctype html><html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1"><meta name="robots" content="noindex">
+<meta name="color-scheme" content="only light">
 <title>""" + title + """</title><style>""" + STYLE + """</style></head><body>
 """ + body + """
-<p class="foot">Ambulance: <a href="tel:112">112</a></p>
+<p class="foot">Pukaar · Ambulance: <a href="tel:112">112</a></p>
 </body></html>""")
 
 
@@ -525,18 +545,18 @@ CLAIM_ACTIONABLE = Template(_page("Emergency — $name needs help", """
 <p class="address"><strong>$address_line1</strong><br>$address_line2</p>
 <p><a class="btn btn-secondary btn-inline" href="$maps_url" target="_blank" rel="noopener">Open in maps</a></p>
 <p>You are one of <strong>$contacted_count people</strong> contacted.<br><strong>No one has gone yet.</strong></p>
-<form method="post"><button class="btn btn-emergency btn-claim" type="submit">I'm going now</button></form>
-<p class="muted">Can't go? That's alright — $others.</p>
+<form method="post"><button class="btn btn-emergency btn-claim" type="submit">I’m going now</button></form>
+<p class="muted">Can’t go? That’s alright — $others.</p>
 """))
 
-CLAIM_YOURS = Template(_page("You're going", """
-<div class="card card-safe"><h1>&#10003; You're going</h1>
-<p>$name has been told you're coming.<br>Everyone else contacted has been told as well.</p></div>
+CLAIM_YOURS = Template(_page("You’re going", """
+<div class="card card-safe"><h1>&#10003; You’re going</h1>
+<p>$name has been told you’re coming.<br>Everyone else contacted has been told as well.</p></div>
 <p class="address"><strong>$address_line1</strong><br>$address_line2</p>
 <p><a class="btn btn-secondary btn-inline" href="$maps_url" target="_blank" rel="noopener">Open in maps</a></p>
 <hr>
-<h2>$name's medical notes</h2>
-<p class="muted">Released because you're going. $name is told you opened this.</p>
+<h2>$name’s medical notes</h2>
+<p class="muted">Released because you’re going. $name is told you opened this.</p>
 $record
 <hr>
 <p><strong>Ambulance: <a href="tel:112">112</a></strong></p>
@@ -558,14 +578,14 @@ CLAIM_OVER = Template(_page("This alert is over", """
 <p>It ended at <strong>$ended_at</strong>. Nothing is needed.</p></div>
 """))
 
-BAD_LINK = _page("This link isn't valid", """
-<h1>This link isn't valid</h1>
+BAD_LINK = _page("This link isn’t valid", """
+<h1>This link isn’t valid</h1>
 <p>It may have been mistyped, or it belongs to an alert that has ended.</p>
 <p><strong>If you think someone needs help, call 112.</strong></p>
 """)
 
 NOT_FOUND = """<!doctype html><html lang="en"><head><meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1"><title>Not found</title>
+<meta name="viewport" content="width=device-width, initial-scale=1"><meta name="color-scheme" content="only light"><title>Not found</title>
 <style>""" + STYLE + """</style></head><body>
 <h1>That page does not exist</h1>
 <p class="foot">Not working? Call <a href="tel:112">112</a></p>

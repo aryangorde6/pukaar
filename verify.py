@@ -177,7 +177,7 @@ b_status = wait_done(b_arn)
 b_inc, b_states = incident(b_id), states(b_arn)
 told = json.loads(b_inc.get("broadcast", {}).get("S", "{}")).get("told", [])
 check("3 claim during the wait short-circuits to BroadcastClaim",
-      st == 200 and "You're going" in body and b_status == "SUCCEEDED" and "BroadcastClaim" in b_states
+      st == 200 and "You’re going" in body and b_status == "SUCCEEDED" and "BroadcastClaim" in b_states
       and "NextTier" not in b_states and b_inc["status"]["S"] == "CLAIMED" and b_inc["claimed_by"]["S"] == "ravi"
       and sorted(told) == reached(b_id) and len(told) >= 3,
       f"states {b_states[-3:]}, status {b_inc['status']['S']} by {b_inc.get('claimed_by', {}).get('S')}, told {sorted(told)}")
@@ -190,7 +190,7 @@ def go(name, t):
     outcome[name] = http("POST", f"claim/{t}")[1]
 th = [threading.Thread(target=go, args=("anil", t_anil)), threading.Thread(target=go, args=("vaishali", t_vaish))]
 [t.start() for t in th]; [t.join() for t in th]
-winners = [n for n, b in outcome.items() if "You're going" in b]
+winners = [n for n, b in outcome.items() if "You’re going" in b]
 losers = [n for n, b in outcome.items() if "is already on the way" in b]
 c_inc = incident(c_id)
 loser_body = outcome[losers[0]] if losers else ""
