@@ -33,6 +33,7 @@ locals {
     select_tier     = "select_tier"
     notify          = "notify"
     check_claim     = "check_claim"
+    broadcast       = "broadcast"
     record_failure  = "record_failure"
   }
 
@@ -451,15 +452,52 @@ resource "aws_sfn_state_machine" "escalation" {
       ClaimDecision = {
         Type = "Choice"
         Choices = [
-          { Variable = "$.claim", StringEquals = "claimed", Next = "Done" },
-          { Variable = "$.claim", StringEquals = "cancelled", Next = "Done" },
+          { Variable = "$.claim", StringEquals = "claimed", Next = "BroadcastClaim" },
+          { Variable = "$.claim", StringEquals = "cancelled", Next = "Cancelled" },
+          {
+            And = [
+              { Variable = "$.claim", StringEquals = "none" },
+              { Variable = "$.tier_index", NumericLessThanPath = "$.max_tier" },
+            ]
+            Next = "NextTier"
+          },
         ]
-        Default = "NoClaimYet"
+        Default = "FinalFallback"
       }
-      # Placeholder for the widen loop. Skeleton only: nobody claimed, nothing else happens yet.
-      NoClaimYet = {
+      # Someone said they are going: everyone who was paged is told who, by name.
+      BroadcastClaim = {
+        Type       = "Task"
+        Resource   = aws_lambda_function.fn["broadcast"].arn
+        Parameters = { kind = "someone_going", "incident_id.$" = "$.incident_id" }
+        ResultPath = "$.broadcast"
+        Retry      = local.lambda_retry
+        Catch      = local.spine_catch
+        Next       = "Done"
+      }
+      # She pressed cancel: everyone who was paged is told it was a false alarm.
+      Cancelled = {
+        Type       = "Task"
+        Resource   = aws_lambda_function.fn["broadcast"].arn
+        Parameters = { kind = "false_alarm", "incident_id.$" = "$.incident_id" }
+        ResultPath = "$.broadcast"
+        Retry      = local.lambda_retry
+        Catch      = local.spine_catch
+        Next       = "Done"
+      }
+      # Nobody came and there is another circle to widen to. SelectTier picks it.
+      NextTier = {
         Type = "Pass"
-        Next = "Done"
+        Next = "SelectTier"
+      }
+      # Every circle has been tried. Everyone on her list is told to call 112 or go.
+      FinalFallback = {
+        Type       = "Task"
+        Resource   = aws_lambda_function.fn["broadcast"].arn
+        Parameters = { kind = "no_one_reached", "incident_id.$" = "$.incident_id" }
+        ResultPath = "$.broadcast"
+        Retry      = local.lambda_retry
+        Catch      = local.spine_catch
+        Next       = "Done"
       }
       RecordFailure = {
         Type       = "Task"

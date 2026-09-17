@@ -4,12 +4,15 @@
     POST /trigger         press it: start an escalation, answer with its id
     GET  /claim/{token}   the responder's page: who, where, and whether anyone has gone
     POST /claim/{token}   "I'm going now" - one conditional write decides the race
+    POST /cancel          she is OK: mark it cancelled; the machine tells everyone
+    GET  /status/{id}     what her screen shows: open, who is coming, cancelled
 
 GET never writes. Mail clients and link scanners fetch every link in an email;
 if a GET could claim, a corporate proxy would be on its way to Sunita instead
 of Ravi.
 """
 
+import base64
 import hashlib
 import json
 import os
@@ -49,7 +52,50 @@ def handler(event, context):
     if path.startswith("/claim/") and method in ("GET", "POST"):
         token = path[len("/claim/"):]
         return claim_page(token) if method == "GET" else claim(token)
+    if method == "POST" and path == "/cancel":
+        return cancel(event)
+    if method == "GET" and path.startswith("/status/"):
+        return status(path[len("/status/"):])
     return html(404, NOT_FOUND)
+
+
+def cancel(event):
+    body = event.get("body") or "{}"
+    if event.get("isBase64Encoded"):
+        body = base64.b64decode(body).decode()
+    incident_id = json.loads(body).get("incident_id", "")
+    if not incident_id:
+        return jsonr(400, {"error": "incident_id required"})
+    now = int(time.time())
+    try:
+        ddb.update_item(
+            TableName=INCIDENTS, Key={"incident_id": {"S": incident_id}},
+            UpdateExpression="SET #s = :c, cancelled_at = :t",
+            ConditionExpression="#s IN (:open, :fallback)",
+            ExpressionAttributeNames={"#s": "status"},
+            ExpressionAttributeValues={":c": {"S": "CANCELLED"}, ":open": {"S": "OPEN"},
+                                       ":fallback": {"S": "FALLBACK"}, ":t": {"N": str(now)}},
+        )
+    except ClientError as e:
+        if e.response["Error"]["Code"] != "ConditionalCheckFailedException":
+            raise
+    print(json.dumps({"component": "web", "event": "cancel", "incident_id": incident_id}))
+    return status(incident_id)
+
+
+def status(incident_id):
+    """What is true on the incident row, and nothing that is not on it."""
+    item = ddb.get_item(TableName=INCIDENTS, Key={"incident_id": {"S": incident_id}},
+                        ConsistentRead=True).get("Item")
+    if item is None:
+        return jsonr(404, {"error": "no such incident"})
+    out = {"incident_id": incident_id, "status": item["status"]["S"]}
+    if "claimed_by_name" in item:
+        out["claimed_by_name"] = item["claimed_by_name"]["S"]
+        out["claimed_at"] = fmt_time(item["claimed_at"]["N"])
+    if "cancelled_at" in item:
+        out["cancelled_at"] = fmt_time(item["cancelled_at"]["N"])
+    return jsonr(200, out)
 
 
 # --- routes -------------------------------------------------------------------
@@ -302,6 +348,19 @@ PAGE = Template("""<!doctype html>
 <main id="sent" hidden>
   <h2>Help is being called</h2>
   <p><strong id="sent-names"></strong> have been told.<br><span class="time" id="sent-time"></span></p>
+  <button class="btn btn-secondary" id="cancel">Cancel — I'm OK</button>
+</main>
+
+<main id="coming" hidden>
+  <div class="card card-safe"><h2>&#10003; <span id="coming-name"></span> is coming</h2>
+  <p>On the way now.<br><span class="time" id="coming-time"></span></p></div>
+  <button class="btn btn-secondary" id="cancel2">Cancel — I'm OK</button>
+</main>
+
+<main id="cancelled" hidden>
+  <div class="card card-caution"><h2>Cancelled</h2>
+  <p>Everyone has been told it was a false alarm.</p></div>
+  <button class="btn btn-emergency" id="again">I need help</button>
 </main>
 
 <main id="failed" hidden>
@@ -315,8 +374,28 @@ PAGE = Template("""<!doctype html>
 <script>
 (function () {
   var names = $names_json;
+  var incident = null, poll = null;
   var show = function (id) {
-    ["idle", "sent", "failed"].forEach(function (s) { document.getElementById(s).hidden = (s !== id); });
+    ["idle", "sent", "failed", "coming", "cancelled"].forEach(function (s) { document.getElementById(s).hidden = (s !== id); });
+  };
+  var stopPoll = function () { if (poll) { clearInterval(poll); poll = null; } };
+  var check = function () {
+    if (!incident) return;
+    fetch("/status/" + incident).then(function (r) { return r.json(); }).then(function (s) {
+      if (s.status === "CLAIMED") {
+        document.getElementById("coming-name").textContent = s.claimed_by_name;
+        document.getElementById("coming-time").textContent = s.claimed_at;
+        show("coming"); stopPoll();
+      } else if (s.status === "CANCELLED") { show("cancelled"); stopPoll(); }
+    }).catch(function () {});
+  };
+  var cancel = function () {
+    if (!incident) return;
+    fetch("/cancel", { method: "POST", headers: { "content-type": "application/json" },
+      body: JSON.stringify({ incident_id: incident }) })
+      .then(function (r) { return r.json(); })
+      .then(function (s) { if (s.status === "CANCELLED") { show("cancelled"); stopPoll(); } else { check(); } })
+      .catch(function () {});
   };
   var joinNames = function (n) {
     return n.length < 2 ? n.join("") : n.slice(0, -1).join(", ") + " and " + n[n.length - 1];
@@ -327,15 +406,22 @@ PAGE = Template("""<!doctype html>
     fetch("/trigger", { method: "POST" })
       .then(function (r) { if (!r.ok) throw new Error(r.status); return r.json(); })
       .then(function (data) {
+        incident = data.incident_id;
         document.getElementById("sent-names").textContent = joinNames(data.told || names);
         document.getElementById("sent-time").textContent =
           new Date().toLocaleTimeString("en-IN", { hour: "numeric", minute: "2-digit" });
         show("sent");
+        stopPoll(); poll = setInterval(check, 3000);
       })
       .catch(function () { btn.disabled = false; show("failed"); });
   };
   document.getElementById("press").addEventListener("click", press);
   document.getElementById("retry").addEventListener("click", function () { show("idle"); press(); });
+  document.getElementById("cancel").addEventListener("click", cancel);
+  document.getElementById("cancel2").addEventListener("click", cancel);
+  document.getElementById("again").addEventListener("click", function () {
+    incident = null; document.getElementById("press").disabled = false; show("idle"); press();
+  });
 })();
 </script>
 </body>
