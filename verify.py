@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Ten checks against the live stack. Each asserts on rows and execution history,
+"""Eleven checks against the live stack. Each asserts on rows and execution history,
 never on a status code alone - SUCCEEDED with nothing in the tables is a failure.
 
 Every check requires something positive to exist. A check that would pass against
@@ -291,6 +291,19 @@ for _ in range(30):
 check("10 the release is logged with who and when",
       len(released) >= 1 and all(r["contact_id"] == winners[0] and r["subject_id"] == "sunita" and r["at"] for r in released),
       f"{len(released)} line(s): {[(r['contact_id'], r['at']) for r in released]}")
+
+# 11. she may be fine after all: a cancel after someone claimed still tells everyone,
+#     though the machine finished with the claim
+st, body = http("POST", "cancel", json.dumps({"incident_id": b_id}).encode())
+b_inc = incident(b_id)
+b_bc = json.loads(b_inc.get("broadcast", {}).get("S", "{}"))
+b_page = http("GET", f"claim/{tok}")[1]
+check("11 cancel after a claim: everyone reached told, the record closed",
+      st == 200 and json.loads(body)["status"] == "CANCELLED" and b_inc["status"]["S"] == "CANCELLED"
+      and b_bc.get("kind") == "false_alarm" and sorted(b_bc.get("told", [])) == reached(b_id)
+      and len(b_bc.get("told", [])) >= 3 and "cancelled this alert" in b_page and first_line not in b_page,
+      f"status {b_inc['status']['S']}, broadcast {b_bc.get('kind')} told {b_bc.get('told')}; claimer's link now: "
+      f"{'cancelled' if 'cancelled this alert' in b_page else 'not cancelled'}, record shown: {first_line in b_page}")
 
 print()
 passed = sum(1 for _, ok in results if ok)

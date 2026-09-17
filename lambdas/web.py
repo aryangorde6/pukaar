@@ -30,6 +30,7 @@ from ranking import TIER_SIZE, rank
 ddb = boto3.client("dynamodb")
 sfn = boto3.client("stepfunctions")
 kms = boto3.client("kms")
+lam = boto3.client("lambda")
 
 CONTACTS = os.environ["CONTACTS_TABLE"]
 SUBJECTS = os.environ["SUBJECTS_TABLE"]
@@ -37,6 +38,7 @@ INCIDENTS = os.environ["INCIDENTS_TABLE"]
 NOTIFICATIONS = os.environ["NOTIFICATIONS_TABLE"]
 RESPONSE_STATS = os.environ["RESPONSE_STATS_TABLE"]
 STATE_MACHINE_ARN = os.environ["STATE_MACHINE_ARN"]
+BROADCAST_FN = os.environ["BROADCAST_FN"]
 SUBJECT_ID = os.environ["SUBJECT_ID"]
 WAIT_S = int(os.environ.get("WAIT_S", "60"))
 MAX_TIER = int(os.environ.get("MAX_TIER", "3"))
@@ -75,17 +77,23 @@ def cancel(event):
         old = ddb.update_item(
             TableName=INCIDENTS, Key={"incident_id": {"S": incident_id}},
             UpdateExpression="SET #s = :c, cancelled_at = :t",
-            ConditionExpression="#s IN (:open, :fallback)",
+            # She may be fine after all, even once someone is on the way: they are told too.
+            ConditionExpression="#s IN (:open, :fallback, :claimed)",
             ExpressionAttributeNames={"#s": "status"},
-            ExpressionAttributeValues={":c": {"S": "CANCELLED"}, ":open": {"S": "OPEN"},
-                                       ":fallback": {"S": "FALLBACK"}, ":t": {"N": str(now)}},
+            ExpressionAttributeValues={":c": {"S": "CANCELLED"}, ":open": {"S": "OPEN"}, ":fallback": {"S": "FALLBACK"},
+                                       ":claimed": {"S": "CLAIMED"}, ":t": {"N": str(now)}},
             ReturnValues="ALL_OLD",
         )
     except ClientError as e:
         if e.response["Error"]["Code"] != "ConditionalCheckFailedException":
             raise
     else:
-        wake(old["Attributes"], "cancelled")
+        if old["Attributes"]["status"]["S"] == "CLAIMED":
+            # The machine finished when the claim was broadcast; tell everyone directly.
+            lam.invoke(FunctionName=BROADCAST_FN, InvocationType="RequestResponse",
+                       Payload=json.dumps({"kind": "false_alarm", "incident_id": incident_id}).encode())
+        else:
+            wake(old["Attributes"], "cancelled")
     print(json.dumps({"component": "web", "event": "cancel", "incident_id": incident_id}))
     return status(incident_id)
 
@@ -114,6 +122,8 @@ def status(incident_id):
     if "claimed_by_name" in item:
         out["claimed_by_name"] = item["claimed_by_name"]["S"]
         out["claimed_at"] = fmt_time(item["claimed_at"]["N"])
+    if "record_opened_at" in item:
+        out["record_opened_at"] = fmt_time(item["record_opened_at"]["N"])
     if "cancelled_at" in item:
         out["cancelled_at"] = fmt_time(item["cancelled_at"]["N"])
     return jsonr(200, out)
@@ -215,7 +225,7 @@ def claim(token):
     # Either way, show what is true now: the row after the write, not what we hoped.
     incident = ddb.get_item(TableName=INCIDENTS, Key={"incident_id": incident["incident_id"]},
                             ConsistentRead=True)["Item"]
-    return html(200, render_claim_state(note, incident))
+    return html(200, render_claim_state(note, incident, on_claim=won))
 
 
 def count_answer(note, now):
@@ -240,7 +250,7 @@ def count_answer(note, now):
                                                ":ms": {"N": str(max(0, now - int(note["sent_at"]["N"])) * 1000)}})
 
 
-def render_claim_state(note, incident):
+def render_claim_state(note, incident, on_claim=False):
     subject = ddb.get_item(TableName=SUBJECTS, Key={"subject_id": incident["subject_id"]})["Item"]
     status = incident["status"]["S"]
     name = escape(subject["name"]["S"])
@@ -264,7 +274,7 @@ def render_claim_state(note, incident):
     if status == "CLAIMED":
         ctx["claimed_at"] = fmt_time(incident["claimed_at"]["N"])
         if incident["claimed_by"]["S"] == note["contact_id"]["S"]:
-            ctx["record"] = open_record(subject, incident["incident_id"]["S"], note["contact_id"]["S"])
+            ctx["record"] = open_record(subject, incident["incident_id"]["S"], note["contact_id"]["S"], on_claim)
             return CLAIM_YOURS.substitute(ctx)
         ctx["claimer"] = escape(incident["claimed_by_name"]["S"])
         return CLAIM_TAKEN.substitute(ctx)
@@ -275,9 +285,11 @@ def render_claim_state(note, incident):
     return CLAIM_OVER.substitute(ctx)
 
 
-def open_record(subject, incident_id, contact_id):
+def open_record(subject, incident_id, contact_id, on_claim):
     """Her medical notes, for the one person who is going. The ciphertext is opened
-    with her id as encryption context, and every opening is logged with who and when."""
+    with her id as encryption context, and every opening is logged with who and when.
+    The opening that comes with the claim itself is also written on her incident, so
+    her screen can say who has them. Later refreshes are logged but write nothing."""
     if "record" not in subject:
         return "<p class=\"muted\">No medical notes on file.</p>"
     subject_id = subject["subject_id"]["S"]
@@ -288,9 +300,13 @@ def open_record(subject, incident_id, contact_id):
         print(json.dumps({"component": "web", "event": "record_release_failed", "incident_id": incident_id,
                           "contact_id": contact_id, "subject_id": subject_id, "error": e.response["Error"]["Code"]}))
         return "<p class=\"muted\">Her medical notes could not be opened. If it matters, call 112.</p>"
+    now = datetime.now(timezone.utc)
     print(json.dumps({"component": "web", "event": "record_released", "incident_id": incident_id,
-                      "contact_id": contact_id, "subject_id": subject_id,
-                      "at": datetime.now(timezone.utc).isoformat(timespec="seconds")}))
+                      "contact_id": contact_id, "subject_id": subject_id, "at": now.isoformat(timespec="seconds")}))
+    if on_claim:
+        ddb.update_item(TableName=INCIDENTS, Key={"incident_id": {"S": incident_id}},
+                        UpdateExpression="SET record_opened_by = :c, record_opened_at = :t",
+                        ExpressionAttributeValues={":c": {"S": contact_id}, ":t": {"N": str(int(now.timestamp()))}})
     return "<p>" + "<br>".join(escape(line) for line in plain.splitlines()) + "</p>"
 
 
@@ -412,7 +428,8 @@ PAGE = Template("""<!doctype html>
 
 <main id="coming" hidden>
   <div class="card card-safe"><h2>&#10003; <span id="coming-name"></span> is coming</h2>
-  <p>On the way now.<br><span class="time" id="coming-time"></span></p></div>
+  <p>On the way now.<br><span class="time" id="coming-time"></span></p>
+  <p id="coming-record" hidden><span id="coming-record-name"></span> has your medical notes.</p></div>
   <button class="btn btn-secondary" id="cancel2">Cancel — I'm OK</button>
 </main>
 
@@ -444,6 +461,8 @@ PAGE = Template("""<!doctype html>
       if (s.status === "CLAIMED") {
         document.getElementById("coming-name").textContent = s.claimed_by_name;
         document.getElementById("coming-time").textContent = s.claimed_at;
+        document.getElementById("coming-record-name").textContent = s.claimed_by_name;
+        document.getElementById("coming-record").hidden = !s.record_opened_at;
         show("coming"); stopPoll();
       } else if (s.status === "CANCELLED") { show("cancelled"); stopPoll(); }
     }).catch(function () {});

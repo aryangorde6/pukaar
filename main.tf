@@ -40,6 +40,7 @@ locals {
   # Named here rather than read from the resource so the web function can start
   # executions without a dependency cycle (machine -> functions -> machine).
   state_machine_name = "${var.prefix}-escalation"
+  broadcast_name     = "${var.prefix}-broadcast"
   state_machine_arn  = "arn:aws:states:${var.region}:${data.aws_caller_identity.current.account_id}:stateMachine:${local.state_machine_name}"
 }
 
@@ -242,6 +243,13 @@ data "aws_iam_policy_document" "web" {
     resources = ["*"]
   }
 
+  # A cancel after someone has already claimed: the machine is done, so the web
+  # function asks broadcast to send the false alarm itself. It still cannot send mail.
+  statement {
+    actions   = ["lambda:InvokeFunction"]
+    resources = ["arn:aws:lambda:${var.region}:${data.aws_caller_identity.current.account_id}:function:${local.broadcast_name}"]
+  }
+
   # Decrypt only, and only when the call names whose record it is.
   statement {
     actions   = ["kms:Decrypt"]
@@ -311,6 +319,7 @@ locals {
     NOTIFICATIONS_TABLE  = aws_dynamodb_table.notifications.name
     RESPONSE_STATS_TABLE = aws_dynamodb_table.response_stats.name
     STATE_MACHINE_ARN    = local.state_machine_arn
+    BROADCAST_FN         = local.broadcast_name
     SUBJECT_ID           = var.subject_id
     SENDER               = var.sender
     WAIT_S               = tostring(var.wait_s)
