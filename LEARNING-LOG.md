@@ -51,3 +51,29 @@ Wrong assumption: That `git log --reverse --format=%cI --max-count=1` prints the
                   from absent evidence), and it was in the auditor.
 Fix:              e166ce0 — `git rev-list --max-parents=0 HEAD` for the root commit, floor truncated to the minute.
 Evidence:         `4 passed`; the root commit is `271deb7 2026-09-17T12:56:53+05:30`, the entry above is 13:15.
+
+## 2026-09-17 13:55 IST — the wait was a timer, so "immediate" was a tier late
+Tried:            The spine as designed: `WaitForClaim` as a `Wait` state with `SecondsPath`, then `CheckClaim` polls the
+                  row. It worked, and it was what the practice stack ran. Then I measured it.
+Broke:            Nothing threw. Execution `t4c-133806`: `WaitForClaim` entered 13:38:09.250, `POST /cancel` landed at
+                  13:38:14.124, the `Cancelled` state — the one that tells the neighbours it was a false alarm — was
+                  entered at 13:38:29.548. **15.4 s** after she pressed cancel, on a 20 s test timer; on the 60 s
+                  production timer that is anything up to a minute of three people getting ready to walk over.
+                  Correctness property 3 in the design says *immediate*. The machine could not know the row had
+                  changed until its timer ran out.
+Wrong assumption: That a Wait + poll was "immediate enough" because the poll is right after the wait. It is
+                  immediate only at the tier boundary. The fix is the one Step Functions feature the practice
+                  stack never used — `.waitForTaskToken` — and I did not know, before today, that it composes with
+                  a plain DynamoDB SDK integration: the *write that parks the token* is a conditional `updateItem`
+                  (`status = OPEN`), `TimeoutSecondsPath` keeps the tier timeout as an input, and the two exits
+                  (`States.Timeout`, `DynamoDb.ConditionalCheckFailedException`) are caught ahead of `States.ALL`
+                  into the same `CheckClaim`. I also assumed a stale token would raise `InvalidToken`; it raises
+                  `TaskTimedOut` (from the log: `{"event": "wake_skipped", "error": "TaskTimedOut"}`).
+Fix:              9a1cf95 — `WaitForClaim` is now `arn:aws:states:::aws-sdk:dynamodb:updateItem.waitForTaskToken`;
+                  the claim's and the cancel's conditional `UpdateItem` use `ReturnValues=ALL_OLD` so the token comes
+                  back in the same write that won the race, and `SendTaskSuccess` is best-effort.
+Evidence:         Same test, after: cancel → `Cancelled` entered **1.0 s** later; claim → `BroadcastClaim` done in
+                  **2.8 s** including the three emails (`t27-claim-*`, `t27-cancel-*`). Timeout path still widens
+                  (`t27a-134849`: `TaskTimedOut States.Timeout` at +5.07 s, then `FinalFallback`). `./verify.sh`
+                  6/6 (`v-135012-*`). The IAM it needed: `dynamodb:UpdateItem` on the machine's role,
+                  `states:SendTaskSuccess` on the web function's.
