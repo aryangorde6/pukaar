@@ -18,3 +18,15 @@ variable "wait_s" {
   type        = number
   default     = 60
 }
+
+variable "subject_id" {
+  description = "The one person this deployment is for. Seeded by seed.py."
+  type        = string
+  default     = "sunita"
+}
+
+variable "max_tier" {
+  description = "How many times the circle widens before the final fallback."
+  type        = number
+  default     = 3
+}

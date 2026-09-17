@@ -1,0 +1,88 @@
+#!/usr/bin/env python3
+"""Seed one subject and her circle. This is the only way people get into the tables.
+
+    python seed.py --prefix pukaar --subject sunita --name Sunita \
+        --address "B-304, Shanti Sadan, Dadar West" --phone "+91 98xxx" \
+        --contact "ravi|Ravi|son|ravi@example.com|1|4200|no" \
+        --contact "meena|Meena|neighbour, same floor|meena@example.com|2|8|no"
+
+Contact fields: id|name|relation|email|tier_hint|proximity_m|home_during_day(yes/no)
+
+Addresses are arguments on purpose: the consent flow that would let anyone add an
+address is not built, so nothing here can be pointed at a stranger.
+
+--history seeds response_stats so the ranking has something to rank on:
+    --history "meena|14#weekday|6|0|0"       id|bucket|pages_sent|responses|total_latency_ms
+The counters are otherwise written by real claims.
+"""
+
+import argparse
+import time
+
+import boto3
+
+
+def main():
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--prefix", default="pukaar")
+    ap.add_argument("--profile", default="hackathon")
+    ap.add_argument("--region", default="ap-south-1")
+    ap.add_argument("--subject", required=True, help="subject_id, e.g. sunita")
+    ap.add_argument("--name", required=True)
+    ap.add_argument("--address", required=True)
+    ap.add_argument("--phone", default="")
+    ap.add_argument("--contact", action="append", default=[], help="id|name|relation|email|tier_hint|proximity_m|home_during_day")
+    ap.add_argument("--history", action="append", default=[], help="id|bucket|pages_sent|responses|total_latency_ms")
+    args = ap.parse_args()
+
+    ddb = boto3.Session(profile_name=args.profile, region_name=args.region).client("dynamodb")
+    now = str(int(time.time()))
+
+    ddb.put_item(
+        TableName=f"{args.prefix}-subjects",
+        Item={
+            "subject_id": {"S": args.subject},
+            "name": {"S": args.name},
+            "address": {"S": args.address},
+            "phone": {"S": args.phone},
+            "created_at": {"N": now},
+        },
+    )
+    print(f"subject  {args.subject}: {args.name}")
+
+    for raw in args.contact:
+        cid, name, relation, email, tier, prox, home = [p.strip() for p in raw.split("|")]
+        ddb.put_item(
+            TableName=f"{args.prefix}-contacts",
+            Item={
+                "subject_id": {"S": args.subject},
+                "contact_id": {"S": cid},
+                "name": {"S": name},
+                "relation": {"S": relation},
+                "email": {"S": email},
+                "tier_hint": {"N": tier},
+                "proximity_m": {"N": prox},
+                "home_during_day": {"BOOL": home.lower() == "yes"},
+                "created_at": {"N": now},
+            },
+        )
+        print(f"contact  {cid:<10} {name:<10} tier {tier}  {prox:>5} m  {email}")
+
+    for raw in args.history:
+        cid, bucket, sent, responses, latency = [p.strip() for p in raw.split("|")]
+        ddb.put_item(
+            TableName=f"{args.prefix}-response-stats",
+            Item={
+                "contact_id": {"S": cid},
+                "bucket": {"S": bucket},
+                "pages_sent": {"N": sent},
+                "responses": {"N": responses},
+                "total_latency_ms": {"N": latency},
+                "seeded": {"BOOL": True},
+            },
+        )
+        print(f"history  {cid:<10} {bucket:<12} {responses}/{sent} answered")
+
+
+if __name__ == "__main__":
+    main()
