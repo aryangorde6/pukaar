@@ -52,7 +52,7 @@ Wrong assumption: That `git log --reverse --format=%cI --max-count=1` prints the
 Fix:              e166ce0 — `git rev-list --max-parents=0 HEAD` for the root commit, floor truncated to the minute.
 Evidence:         `4 passed`; the root commit is `271deb7 2026-09-17T12:56:53+05:30`, the entry above is 13:15.
 
-## 2026-09-17 13:55 IST — the wait was a timer, so "immediate" was a tier late
+## 2026-09-17 13:52 IST — the wait was a timer, so "immediate" was a tier late
 Tried:            The spine as designed: `WaitForClaim` as a `Wait` state with `SecondsPath`, then `CheckClaim` polls the
                   row. It worked, and it was what the practice stack ran. Then I measured it.
 Broke:            Nothing threw. Execution `t4c-133806`: `WaitForClaim` entered 13:38:09.250, `POST /cancel` landed at
