@@ -36,7 +36,7 @@ Pukaar replaces the sequence with a fan-out. One press pages the three people mo
   <img src="docs/05-cancelled.png" width="19%" alt="After she cancels: Sunita cancelled this alert">
 </p>
 
-*Her button · the alert · you're going (with the notes) · already on the way · cancelled. Every text colour on these screens is at least 7.3:1 against its background; the button is 240 px tall, every other target at least 48 px.*
+*Her button · the alert · you're going (with the notes) · already on the way · cancelled. Every text colour on these screens is at least 7:1 against its background, the AAA line; the button is 240 px tall, every other target at least 48 px.*
 
 ### Correctness properties, stated
 
@@ -98,7 +98,7 @@ near     1 / (1 + metres / 100)
 
 So a known answerer beats an unknown, an unknown beats a known non-answerer, and distance decides only between people the history cannot separate. Every page (`notify`) adds to `pages_sent` for that person and hour; every tap on a link (`web`) adds one response and its latency — once per page, win or lose, because a lost race still says they were reachable.
 
-**What it changes, on the seeded circle** (`seed.sh`; the histories are seeded, the counters written since are real):
+**What it changes, on the seeded circle** (`seed.sh`; the histories are seeded, the counters written since are real; scores as at any hour but the seeded 2 pm one, when those rows count twice):
 
 | | Nearest three by distance | First circle by score |
 | --- | --- | --- |
@@ -147,7 +147,7 @@ Also new to me this week, without a break to log: a KMS encryption context as th
 
 - **No SMS or calls.** Email only, because SES works today and Indian sender-ID SMS needs a registration. An older person's helpers mostly have Gmail on their phones; this is a channel choice, not a claim that email is enough.
 - **Dispatch, not delivery.** SES accepts the message; where Gmail files it is unobservable from this side and drifts. Every check here asserts on the send, the row and the message id.
-- **The histories in the demo are seeded.** `seed.sh` writes the 2 pm records that make the ranking visible; the counters written since are real (a real claim at 5:57 pm added `responses 1, 46 000 ms` to Ravi's `17#weekday` row). A low-stakes periodic test ping — "tap to confirm you'd be reachable" — would grow real history without waiting for emergencies; it is the stated next step, not built.
+- **The histories in the demo are seeded.** `seed.sh` writes the 2 pm records that make the ranking visible and, on re-run, deletes everything counted since; between runs the counters are real (a real claim at 5:57 pm added `responses 1, 46 000 ms` to Ravi's `17#weekday` row, until the next reseed). A low-stakes periodic test ping — "tap to confirm you'd be reachable" — would grow real history without waiting for emergencies; it is the stated next step, not built.
 - **Consent, caps and removal for contacts are designed, not built.** Nothing can add a stranger's address: subjects and contacts enter through a script the operator runs. There is no self-serve form, precisely because an open form here is an open relay.
 - **The unconscious case is not covered.** She has to press. A passive check-in backstop was cut first.
 - **One subject.** The web function serves one person's button (`SUBJECT_ID`); many subjects is a routing change, not a design change.
@@ -162,7 +162,7 @@ Commercial systems converge on this shape — [Alerto](https://alertotech.com/),
 ```bash
 terraform init && terraform apply          # AWS_PROFILE and region in variables.tf
 ./seed.sh                                  # Sunita, her six contacts, their histories, her sealed notes
-./verify.sh                                # eleven live checks; reseeds first
+./verify.sh                                # eleven live checks; reseeds before and after
 .venv/bin/pytest -q                        # ranking, the learning log, the cost numbers
 ```
 
