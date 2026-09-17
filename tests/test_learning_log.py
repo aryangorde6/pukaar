@@ -21,7 +21,11 @@ def git(*args):
 
 
 def first_commit_time():
-    return datetime.fromisoformat(git("log", "--reverse", "--format=%cI", "--max-count=1"))
+    # `git log --reverse --max-count=1` returns the newest commit, not the oldest:
+    # the limit is applied before the reversal. Ask for the root commit by name.
+    root = git("rev-list", "--max-parents=0", "HEAD")
+    when = datetime.fromisoformat(git("show", "-s", "--format=%cI", root))
+    return when.replace(second=0, microsecond=0)  # entries carry minute precision
 
 
 def entries():
