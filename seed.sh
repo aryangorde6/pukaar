@@ -8,6 +8,7 @@ set -euo pipefail
 cd "$(dirname "$0")"
 .venv/bin/python seed.py --subject sunita --name Sunita \
   --address "B-304, Shanti Sadan, Dadar West, Mumbai" --phone "+91 98200 00000" \
+  --record "Blood group B+ · Diabetic, on metformin · Allergic to penicillin | Daughter: Priya, 98200 00001" \
   --contact "vaishali|Vaishali|neighbour, 2nd floor|aryangorde6+vaishali@gmail.com|1|40|yes" \
   --contact "anil|Anil|neighbour, building watchman's flat|aryangorde8+anil@gmail.com|1|60|yes" \
   --contact "ravi|Ravi|son|aryangorde8+ravi@gmail.com|1|4200|no" \

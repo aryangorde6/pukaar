@@ -184,17 +184,6 @@ data "aws_iam_policy_document" "lambda" {
   }
 
   statement {
-    actions   = ["states:StartExecution"]
-    resources = [local.state_machine_arn]
-  }
-
-  # Waking the parked machine. SendTaskSuccess has no resource-level scope.
-  statement {
-    actions   = ["states:SendTaskSuccess"]
-    resources = ["*"]
-  }
-
-  statement {
     actions   = ["ses:SendEmail", "ses:SendRawEmail"]
     resources = ["arn:aws:ses:${var.region}:${data.aws_caller_identity.current.account_id}:identity/${var.sender_domain}"]
   }
@@ -214,6 +203,76 @@ resource "aws_iam_role_policy" "lambda" {
   name   = "${var.prefix}-lambda"
   role   = aws_iam_role.lambda.id
   policy = data.aws_iam_policy_document.lambda.json
+}
+
+# The web function has its own role: it is the only principal that can open the
+# sealed record, and the only one that starts or wakes the machine. It cannot send
+# email; the paging functions cannot decrypt.
+resource "aws_iam_role" "web" {
+  name               = "${var.prefix}-web"
+  assume_role_policy = data.aws_iam_policy_document.lambda_assume.json
+}
+
+data "aws_iam_policy_document" "web" {
+  statement {
+    actions   = ["logs:CreateLogStream", "logs:PutLogEvents"]
+    resources = ["arn:aws:logs:${var.region}:*:log-group:/aws/lambda/${var.prefix}-web:*"]
+  }
+
+  statement {
+    actions = [
+      "dynamodb:GetItem",
+      "dynamodb:UpdateItem",
+      "dynamodb:Query",
+    ]
+    resources = concat(
+      [for t in local.tables : t.arn],
+      [for t in local.tables : "${t.arn}/index/*"],
+    )
+  }
+
+  statement {
+    actions   = ["states:StartExecution"]
+    resources = [local.state_machine_arn]
+  }
+
+  # Waking the parked machine. SendTaskSuccess has no resource-level scope.
+  statement {
+    actions   = ["states:SendTaskSuccess"]
+    resources = ["*"]
+  }
+
+  # Decrypt only, and only when the call names whose record it is.
+  statement {
+    actions   = ["kms:Decrypt"]
+    resources = [aws_kms_key.record.arn]
+    condition {
+      test     = "Null"
+      variable = "kms:EncryptionContext:subject_id"
+      values   = ["false"]
+    }
+  }
+}
+
+resource "aws_iam_role_policy" "web" {
+  name   = "${var.prefix}-web"
+  role   = aws_iam_role.web.id
+  policy = data.aws_iam_policy_document.web.json
+}
+
+# --- Sealed record -----------------------------------------------------------
+# Her medical notes are encrypted under a key of this stack's own, because the
+# AWS-managed DynamoDB key cannot be called from application code. The seed
+# encrypts with the subject's id as encryption context; the same id must be
+# presented to decrypt, so one subject's ciphertext cannot be opened as another's.
+resource "aws_kms_key" "record" {
+  description             = "${var.prefix}: sealed medical records, opened only for whoever is going"
+  deletion_window_in_days = 7
+}
+
+resource "aws_kms_alias" "record" {
+  name          = "alias/${var.prefix}-record"
+  target_key_id = aws_kms_key.record.key_id
 }
 
 # Declared explicitly so retention is set. Lambda's auto-created group never expires.
@@ -263,7 +322,7 @@ locals {
 # for the links in their emails, and a function cannot depend on its own URL.
 resource "aws_lambda_function" "web" {
   function_name    = "${var.prefix}-web"
-  role             = aws_iam_role.lambda.arn
+  role             = aws_iam_role.web.arn
   handler          = "web.handler"
   runtime          = "python3.13"
   architectures    = ["arm64"]
@@ -577,4 +636,8 @@ output "create_incident_fn" {
 moved {
   from = aws_lambda_function.fn["web"]
   to   = aws_lambda_function.web
+}
+
+output "record_key" {
+  value = aws_kms_alias.record.name
 }

@@ -11,6 +11,11 @@ Contact fields: id|name|relation|email|tier_hint|proximity_m|home_during_day(yes
 Addresses are arguments on purpose: the consent flow that would let anyone add an
 address is not built, so nothing here can be pointed at a stranger.
 
+--record "Blood group B+ | Allergic to penicillin" is her medical notes ("|" starts a
+new line). They are encrypted here, under the stack's key with her subject_id as the
+encryption context, and stored as ciphertext; nothing in the tables holds them in the
+clear. Only the web function can open them, and only for whoever is going.
+
 --history seeds response_stats so the ranking has something to rank on:
     --history "meena|14#weekday|6|0|0"       id|bucket|pages_sent|responses|total_latency_ms
 The counters are otherwise written by real pages and claims. --reset-history first
@@ -33,25 +38,32 @@ def main():
     ap.add_argument("--name", required=True)
     ap.add_argument("--address", required=True)
     ap.add_argument("--phone", default="")
+    ap.add_argument("--record", default="", help="medical notes, '|' between lines; sealed with KMS")
     ap.add_argument("--contact", action="append", default=[], help="id|name|relation|email|tier_hint|proximity_m|home_during_day")
     ap.add_argument("--history", action="append", default=[], help="id|bucket|pages_sent|responses|total_latency_ms")
     ap.add_argument("--reset-history", action="store_true", help="delete the listed contacts' stats rows first")
     args = ap.parse_args()
 
-    ddb = boto3.Session(profile_name=args.profile, region_name=args.region).client("dynamodb")
+    session = boto3.Session(profile_name=args.profile, region_name=args.region)
+    ddb = session.client("dynamodb")
     now = str(int(time.time()))
 
-    ddb.put_item(
-        TableName=f"{args.prefix}-subjects",
-        Item={
-            "subject_id": {"S": args.subject},
-            "name": {"S": args.name},
-            "address": {"S": args.address},
-            "phone": {"S": args.phone},
-            "created_at": {"N": now},
-        },
-    )
-    print(f"subject  {args.subject}: {args.name}")
+    item = {
+        "subject_id": {"S": args.subject},
+        "name": {"S": args.name},
+        "address": {"S": args.address},
+        "phone": {"S": args.phone},
+        "created_at": {"N": now},
+    }
+    if args.record:
+        sealed = session.client("kms").encrypt(
+            KeyId=f"alias/{args.prefix}-record",
+            Plaintext="\n".join(part.strip() for part in args.record.split("|")).encode(),
+            EncryptionContext={"subject_id": args.subject},
+        )
+        item["record"] = {"B": sealed["CiphertextBlob"]}
+    ddb.put_item(TableName=f"{args.prefix}-subjects", Item=item)
+    print(f"subject  {args.subject}: {args.name}" + (f", record sealed ({len(item['record']['B'])} bytes)" if args.record else ""))
 
     for raw in args.contact:
         cid, name, relation, email, tier, prox, home = [p.strip() for p in raw.split("|")]

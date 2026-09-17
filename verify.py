@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Eight checks against the live stack. Each asserts on rows and execution history,
+"""Ten checks against the live stack. Each asserts on rows and execution history,
 never on a status code alone - SUCCEEDED with nothing in the tables is a failure.
 
 Every check requires something positive to exist. A check that would pass against
@@ -29,6 +29,8 @@ TABLES = {name.split("-", 1)[1]: name for name in out["tables"]["value"]}
 sfn = boto3.client("stepfunctions", region_name=REGION)
 ddb = boto3.client("dynamodb", region_name=REGION)
 lam = boto3.client("lambda", region_name=REGION)
+kms = boto3.client("kms", region_name=REGION)
+logs = boto3.client("logs", region_name=REGION)
 PREFIX = out["tables"]["value"][0].split("-", 1)[0]
 RUN = time.strftime("%H%M%S")
 results = []
@@ -169,6 +171,7 @@ check("2 dedupe under re-invocation", dedup.get("deduped") is True and before ==
 # 3. claim mid-wait -> BroadcastClaim, everyone reached is told
 wait_for_rows(b_id, 3)
 tok = plant_token(b_id, "ravi")
+b_actionable = http("GET", f"claim/{tok}")[1]
 st, body = http("POST", f"claim/{tok}")
 b_status = wait_done(b_arn)
 b_inc, b_states = incident(b_id), states(b_arn)
@@ -255,6 +258,39 @@ check("8 pages and answers are counted",
       and sum(delta[c][2] for c in {r["contact_id"]["S"] for r in answered}) == latency_expected,
       f"pages counted for {len(paged)} contacts; answers {[r['contact_id']['S'] for r in answered]} +1 each; "
       f"latency {latency_expected} ms")
+
+# 9. the sealed record: ciphertext at rest, opened only with her id as context, shown
+#    only on the winner's page - never the loser's, never before the claim
+sealed = ddb.get_item(TableName=TABLES["subjects"], Key={"subject_id": {"S": "sunita"}})["Item"]["record"]["B"]
+plain = kms.decrypt(CiphertextBlob=sealed, EncryptionContext={"subject_id": "sunita"})["Plaintext"].decode()
+try:
+    kms.decrypt(CiphertextBlob=sealed, EncryptionContext={"subject_id": "someone-else"})
+    swap = "decrypted"
+except kms.exceptions.InvalidCiphertextException:
+    swap = "InvalidCiphertextException"
+first_line = plain.splitlines()[0]
+loser_tok = {"anil": t_anil, "vaishali": t_vaish}[losers[0]] if losers else ""
+loser_get = http("GET", f"claim/{loser_tok}")[1] if loser_tok else ""
+check("9 sealed record opens for the one who is going, and only them",
+      bool(first_line) and first_line.encode() not in sealed and swap == "InvalidCiphertextException"
+      and first_line in (outcome[winners[0]] if winners else "") and first_line not in loser_body
+      and first_line not in loser_get and first_line not in b_actionable,
+      f"at rest {len(sealed)} bytes of ciphertext; wrong context -> {swap}; on winner's page: "
+      f"{first_line in outcome[winners[0]] if winners else False}; on loser's page/link: "
+      f"{first_line in loser_body or first_line in loser_get}; before the claim: {first_line in b_actionable}")
+
+# 10. every opening is logged with who and when
+released = []
+for _ in range(30):
+    released = [json.loads(e["message"].split("\t")[-1]) for e in logs.filter_log_events(
+        logGroupName=f"/aws/lambda/{PREFIX}-web", startTime=(int(time.time()) - 600) * 1000,
+        filterPattern=f'{{ $.event = "record_released" && $.incident_id = "{c_id}" }}')["events"]]
+    if released:
+        break
+    time.sleep(1)
+check("10 the release is logged with who and when",
+      len(released) >= 1 and all(r["contact_id"] == winners[0] and r["subject_id"] == "sunita" and r["at"] for r in released),
+      f"{len(released)} line(s): {[(r['contact_id'], r['at']) for r in released]}")
 
 print()
 passed = sum(1 for _, ok in results if ok)

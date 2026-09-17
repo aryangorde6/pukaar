@@ -29,6 +29,7 @@ from ranking import TIER_SIZE, rank
 
 ddb = boto3.client("dynamodb")
 sfn = boto3.client("stepfunctions")
+kms = boto3.client("kms")
 
 CONTACTS = os.environ["CONTACTS_TABLE"]
 SUBJECTS = os.environ["SUBJECTS_TABLE"]
@@ -263,6 +264,7 @@ def render_claim_state(note, incident):
     if status == "CLAIMED":
         ctx["claimed_at"] = fmt_time(incident["claimed_at"]["N"])
         if incident["claimed_by"]["S"] == note["contact_id"]["S"]:
+            ctx["record"] = open_record(subject, incident["incident_id"]["S"], note["contact_id"]["S"])
             return CLAIM_YOURS.substitute(ctx)
         ctx["claimer"] = escape(incident["claimed_by_name"]["S"])
         return CLAIM_TAKEN.substitute(ctx)
@@ -271,6 +273,25 @@ def render_claim_state(note, incident):
         return CLAIM_CANCELLED.substitute(ctx)
     ctx["ended_at"] = fmt_time(incident.get("failed_at", incident.get("ended_at", incident["started_at"]))["N"])
     return CLAIM_OVER.substitute(ctx)
+
+
+def open_record(subject, incident_id, contact_id):
+    """Her medical notes, for the one person who is going. The ciphertext is opened
+    with her id as encryption context, and every opening is logged with who and when."""
+    if "record" not in subject:
+        return "<p class=\"muted\">No medical notes on file.</p>"
+    subject_id = subject["subject_id"]["S"]
+    try:
+        plain = kms.decrypt(CiphertextBlob=subject["record"]["B"],
+                            EncryptionContext={"subject_id": subject_id})["Plaintext"].decode()
+    except ClientError as e:
+        print(json.dumps({"component": "web", "event": "record_release_failed", "incident_id": incident_id,
+                          "contact_id": contact_id, "subject_id": subject_id, "error": e.response["Error"]["Code"]}))
+        return "<p class=\"muted\">Her medical notes could not be opened. If it matters, call 112.</p>"
+    print(json.dumps({"component": "web", "event": "record_released", "incident_id": incident_id,
+                      "contact_id": contact_id, "subject_id": subject_id,
+                      "at": datetime.now(timezone.utc).isoformat(timespec="seconds")}))
+    return "<p>" + "<br>".join(escape(line) for line in plain.splitlines()) + "</p>"
 
 
 def fmt_time(epoch):
@@ -361,6 +382,7 @@ p { margin: 0 0 var(--space-4); }
 .card h1 { font-size: var(--text-xl); margin-bottom: var(--space-3); }
 .card p { margin: 0; }
 .card-over { background: var(--surface); border: 3px solid var(--border); color: var(--over); }
+hr { border: 0; border-top: 2px solid var(--border); margin: var(--space-6) 0; }
 .foot { margin-top: var(--space-12); font-size: var(--text-sm); color: var(--ink-muted); }
 .foot a { color: inherit; }
 [hidden] { display: none !important; }
@@ -490,6 +512,12 @@ CLAIM_YOURS = Template(_page("You're going", """
 <p>$name has been told you're coming.<br>Everyone else contacted has been told as well.</p></div>
 <p class="address"><strong>$address_line1</strong><br>$address_line2</p>
 <p><a class="btn btn-secondary btn-inline" href="$maps_url" target="_blank" rel="noopener">Open in maps</a></p>
+<hr>
+<h2>$name's medical notes</h2>
+<p class="muted">Released because you're going. $name is told you opened this.</p>
+$record
+<hr>
+<p><strong>Ambulance: <a href="tel:112">112</a></strong></p>
 """))
 
 CLAIM_TAKEN = Template(_page("$claimer is already on the way", """
