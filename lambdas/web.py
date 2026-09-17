@@ -25,6 +25,8 @@ from string import Template
 import boto3
 from botocore.exceptions import ClientError
 
+from ranking import TIER_SIZE, rank
+
 ddb = boto3.client("dynamodb")
 sfn = boto3.client("stepfunctions")
 
@@ -32,6 +34,7 @@ CONTACTS = os.environ["CONTACTS_TABLE"]
 SUBJECTS = os.environ["SUBJECTS_TABLE"]
 INCIDENTS = os.environ["INCIDENTS_TABLE"]
 NOTIFICATIONS = os.environ["NOTIFICATIONS_TABLE"]
+RESPONSE_STATS = os.environ["RESPONSE_STATS_TABLE"]
 STATE_MACHINE_ARN = os.environ["STATE_MACHINE_ARN"]
 SUBJECT_ID = os.environ["SUBJECT_ID"]
 WAIT_S = int(os.environ.get("WAIT_S", "60"))
@@ -205,15 +208,35 @@ def claim(token):
         if e.response["Error"]["Code"] != "ConditionalCheckFailedException":
             raise
         won = False
-    ddb.update_item(TableName=NOTIFICATIONS,
-                    Key={"incident_id": note["incident_id"], "contact_tier": note["contact_tier"]},
-                    UpdateExpression="SET responded_at = :t", ExpressionAttributeValues={":t": {"N": str(now)}})
+    count_answer(note, now)
     print(json.dumps({"component": "web", "event": "claim", "incident_id": incident["incident_id"]["S"],
                       "contact_id": note["contact_id"]["S"], "won": won}))
     # Either way, show what is true now: the row after the write, not what we hoped.
     incident = ddb.get_item(TableName=INCIDENTS, Key={"incident_id": incident["incident_id"]},
                             ConsistentRead=True)["Item"]
     return html(200, render_claim_state(note, incident))
+
+
+def count_answer(note, now):
+    """They answered a page: one response and its latency, against the hour the page went
+    out. Once per page, win or lose - a lost race still says they were reachable."""
+    try:
+        ddb.update_item(TableName=NOTIFICATIONS,
+                        Key={"incident_id": note["incident_id"], "contact_tier": note["contact_tier"]},
+                        UpdateExpression="SET responded_at = :t",
+                        ConditionExpression="attribute_not_exists(responded_at)",
+                        ExpressionAttributeValues={":t": {"N": str(now)}})
+    except ClientError as e:
+        if e.response["Error"]["Code"] != "ConditionalCheckFailedException":
+            raise
+        return
+    if "sent_at" not in note or "bucket" not in note:
+        return  # no page time on record, so no latency to count
+    ddb.update_item(TableName=RESPONSE_STATS,
+                    Key={"contact_id": note["contact_id"], "bucket": note["bucket"]},
+                    UpdateExpression="ADD responses :one, total_latency_ms :ms",
+                    ExpressionAttributeValues={":one": {"N": "1"},
+                                               ":ms": {"N": str(max(0, now - int(note["sent_at"]["N"])) * 1000)}})
 
 
 def render_claim_state(note, incident):
@@ -257,14 +280,9 @@ def fmt_time(epoch):
 # --- data ---------------------------------------------------------------------
 
 def first_circle_names():
-    """The people paged first. Until ranking exists this is the static tier hint."""
-    rows = ddb.query(
-        TableName=CONTACTS,
-        KeyConditionExpression="subject_id = :s",
-        FilterExpression="tier_hint = :one",
-        ExpressionAttributeValues={":s": {"S": SUBJECT_ID}, ":one": {"N": "1"}},
-    )["Items"]
-    return sorted(r["name"]["S"] for r in rows)
+    """The people a press right now would page first: the same ranking SelectTier uses,
+    with nobody reached yet."""
+    return [c["name"] for c in rank(SUBJECT_ID, time.time())[:TIER_SIZE]]
 
 
 def join_names(names):

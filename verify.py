@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Six checks against the live stack. Each asserts on rows and execution history,
+"""Eight checks against the live stack. Each asserts on rows and execution history,
 never on a status code alone - SUCCEEDED with nothing in the tables is a failure.
 
 Every check requires something positive to exist. A check that would pass against
@@ -80,12 +80,37 @@ def rows(incident_id):
 def plant_token(incident_id, contact_id):
     """A row exactly like the one a delivered email leaves behind, with a token we know."""
     token = secrets.token_urlsafe(24)
+    now = str(int(time.time()))
     ddb.put_item(TableName=TABLES["notifications"], Item={
         "incident_id": {"S": incident_id}, "contact_tier": {"S": f"{contact_id}#V"},
         "contact_id": {"S": contact_id}, "tier": {"N": "0"}, "channel": {"S": "verify"},
         "token_hash": {"S": hashlib.sha256(token.encode()).hexdigest()},
-        "delivered": {"BOOL": False}, "created_at": {"N": str(int(time.time()))}})
+        "delivered": {"BOOL": False}, "created_at": {"N": now}, "sent_at": {"N": now},
+        "bucket": {"S": "verify"}})
     return token
+
+
+def stats():
+    """Per contact, counters summed over every hour bucket."""
+    out = {}
+    for r in ddb.scan(TableName=TABLES["response-stats"], ConsistentRead=True)["Items"]:
+        p, a, l = (int(r.get(k, {}).get("N", 0)) for k in ("pages_sent", "responses", "total_latency_ms"))
+        cid = r["contact_id"]["S"]
+        out[cid] = tuple(x + y for x, y in zip(out.get(cid, (0, 0, 0)), (p, a, l)))
+    return out
+
+
+def select_tier_outputs(arn):
+    outs = []
+    token = None
+    while True:
+        kw = {"nextToken": token} if token else {}
+        h = sfn.get_execution_history(executionArn=arn, maxResults=500, **kw)
+        outs += [json.loads(e["stateExitedEventDetails"]["output"]) for e in h["events"]
+                 if e["type"].endswith("StateExited") and e["stateExitedEventDetails"]["name"] == "SelectTier"]
+        token = h.get("nextToken")
+        if not token:
+            return outs
 
 
 def http(method, path, body=None):
@@ -114,6 +139,8 @@ def wait_for_rows(incident_id, n, timeout=30):
 
 # ---------------------------------------------------------------------------
 print(f"stack {PREFIX} · {URL}")
+
+stats_before = stats()
 
 # A: fan-out, then nobody claims -> widen -> final fallback. B, C, D run alongside.
 a_id, a_arn = start("fanout", wait_s=5)
@@ -194,7 +221,41 @@ check("4 no claim -> NextTier -> FinalFallback, everyone told",
       f"states include NextTier={'NextTier' in a_states} FinalFallback={'FinalFallback' in a_states}; "
       f"status {a_inc['status']['S']}; told {len(a_bc.get('told', []))}; fallback rows {len(f_rows)}")
 
+# 7. ranking decides membership: the nearest contact with the worst history is not in
+#    tier 1, though distance alone would put them there; they are paged at tier 2
+contacts = ddb.query(TableName=TABLES["contacts"], KeyConditionExpression="subject_id = :s",
+                     ExpressionAttributeValues={":s": {"S": "sunita"}})["Items"]
+by_distance = [c["contact_id"]["S"] for c in sorted(contacts, key=lambda c: int(c["proximity_m"]["N"]))]
+nearest = by_distance[0]
+picks = select_tier_outputs(a_arn)
+tier1 = [c["contact_id"] for c in picks[0]["contacts"]] if picks else []
+basis = {r["contact_id"]: r["basis"] for r in picks[0].get("ranking", [])} if picks else {}
+paged_at = {r["contact_id"]["S"]: r["tier"]["N"] for r in rows(a_id) if r.get("delivered", {}).get("BOOL")
+            and not r["contact_tier"]["S"].endswith(("#V", "#F"))}
+best = max(stats_before, key=lambda c: stats_before[c][1] / stats_before[c][0])  # answered / paged, seeded
+check("7 ranking changes who is paged first",
+      len(tier1) == 3 and nearest in by_distance[:3] and nearest not in tier1
+      and basis.get(nearest, "").startswith("0/") and paged_at.get(nearest) == "2"
+      and best in tier1 and all(basis.get(c) for c in by_distance),
+      f"tier 1 {tier1} vs nearest three {by_distance[:3]}; {nearest} ({basis.get(nearest)}) paged at tier "
+      f"{paged_at.get(nearest)}; best history {best} ({basis.get(best)}) in tier 1")
+
+# 8. counters: every page adds pages_sent, every answer adds responses and its latency
 wait_done(c_arn)
+stats_after = stats()
+delta = {cid: tuple(a - b for a, b in zip(stats_after.get(cid, (0, 0, 0)), stats_before.get(cid, (0, 0, 0))))
+         for cid in {*stats_after, *stats_before}}
+paged = {r["contact_id"]["S"] for i in (a_id, b_id, c_id, d_id) for r in rows(i)
+         if r.get("delivered", {}).get("BOOL") and not r["contact_tier"]["S"].endswith(("#V", "#F"))}
+answered = [r for i in (b_id, c_id) for r in rows(i) if r["contact_tier"]["S"].endswith("#V") and "responded_at" in r]
+latency_expected = sum((int(r["responded_at"]["N"]) - int(r["sent_at"]["N"])) * 1000 for r in answered)
+check("8 pages and answers are counted",
+      len(paged) >= 3 and all(delta[c][0] >= 1 for c in paged)
+      and len(answered) == 3 and all(delta[r["contact_id"]["S"]][1] == 1 for r in answered)
+      and sum(delta[c][2] for c in {r["contact_id"]["S"] for r in answered}) == latency_expected,
+      f"pages counted for {len(paged)} contacts; answers {[r['contact_id']['S'] for r in answered]} +1 each; "
+      f"latency {latency_expected} ms")
+
 print()
 passed = sum(1 for _, ok in results if ok)
 print(f"{passed}/{len(results)} passed · executions: {a_arn.rsplit(':', 1)[1]}, {b_id}, {c_id}, {d_id}")

@@ -16,11 +16,13 @@ import time
 import boto3
 from botocore.exceptions import ClientError
 
+from ranking import bucket_for
 from templates import render
 
 ddb = boto3.client("dynamodb")
 ses = boto3.client("sesv2")
 NOTIFICATIONS = os.environ["NOTIFICATIONS_TABLE"]
+RESPONSE_STATS = os.environ["RESPONSE_STATS_TABLE"]
 BASE_URL = os.environ["BASE_URL"].rstrip("/") + "/"
 SENDER = os.environ["SENDER"]
 
@@ -37,6 +39,7 @@ def handler(event, context):
     contact = event["contact"]
     key = {"incident_id": {"S": incident_id}, "contact_tier": {"S": f"{contact['contact_id']}#{tier}"}}
     now = int(time.time())
+    bucket = bucket_for(now)
 
     token = secrets.token_urlsafe(24)
     token_hash = hashlib.sha256(token.encode()).hexdigest()
@@ -49,6 +52,7 @@ def handler(event, context):
                 "tier": {"N": str(tier)},
                 "token_hash": {"S": token_hash},
                 "channel": {"S": "email"},
+                "bucket": {"S": bucket},
                 "delivered": {"BOOL": False},
                 "created_at": {"N": str(now)},
             },
@@ -64,7 +68,8 @@ def handler(event, context):
             return {"notified": True, "deduped": True, "contact_id": contact["contact_id"]}
         # Row exists but nothing reached them: a retry after a transient failure. New token, send.
         ddb.update_item(TableName=NOTIFICATIONS, Key=key,
-                        UpdateExpression="SET token_hash = :h", ExpressionAttributeValues={":h": {"S": token_hash}})
+                        UpdateExpression="SET token_hash = :h, bucket = :b",
+                        ExpressionAttributeValues={":h": {"S": token_hash}, ":b": {"S": bucket}})
         log("retrying", incident_id, contact, tier, "row existed undelivered")
 
     kind = "first_alert" if tier == 1 else "widened"
@@ -105,7 +110,21 @@ def handler(event, context):
                     ExpressionAttributeValues={":t": {"BOOL": True}, ":s": {"N": str(now)},
                                                ":m": {"S": sent["MessageId"]}})
     log("sent", incident_id, contact, tier, sent["MessageId"])
+    count_page(contact, bucket)
     return {"notified": True, "contact_id": contact["contact_id"]}
+
+
+def count_page(contact, bucket):
+    """One more page to this person at this hour, for the ranking. The page is already
+    sent and recorded; a failure here must not be read as a page that did not happen."""
+    try:
+        ddb.update_item(TableName=RESPONSE_STATS,
+                        Key={"contact_id": {"S": contact["contact_id"]}, "bucket": {"S": bucket}},
+                        UpdateExpression="ADD pages_sent :one",
+                        ExpressionAttributeValues={":one": {"N": "1"}})
+    except ClientError as e:
+        print(json.dumps({"component": "notify", "event": "count_skipped", "contact_id": contact["contact_id"],
+                          "bucket": bucket, "error": e.response["Error"]["Code"]}))
 
 
 def log(event_name, incident_id, contact, tier, detail):

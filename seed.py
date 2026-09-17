@@ -13,7 +13,9 @@ address is not built, so nothing here can be pointed at a stranger.
 
 --history seeds response_stats so the ranking has something to rank on:
     --history "meena|14#weekday|6|0|0"       id|bucket|pages_sent|responses|total_latency_ms
-The counters are otherwise written by real claims.
+The counters are otherwise written by real pages and claims. --reset-history first
+deletes every stats row of the listed contacts, so a reseed starts from the seeded
+histories alone and not from what test runs have counted since.
 """
 
 import argparse
@@ -33,6 +35,7 @@ def main():
     ap.add_argument("--phone", default="")
     ap.add_argument("--contact", action="append", default=[], help="id|name|relation|email|tier_hint|proximity_m|home_during_day")
     ap.add_argument("--history", action="append", default=[], help="id|bucket|pages_sent|responses|total_latency_ms")
+    ap.add_argument("--reset-history", action="store_true", help="delete the listed contacts' stats rows first")
     args = ap.parse_args()
 
     ddb = boto3.Session(profile_name=args.profile, region_name=args.region).client("dynamodb")
@@ -67,6 +70,16 @@ def main():
             },
         )
         print(f"contact  {cid:<10} {name:<10} tier {tier}  {prox:>5} m  {email}")
+
+    if args.reset_history:
+        stats = f"{args.prefix}-response-stats"
+        for raw in args.contact:
+            cid = raw.split("|")[0].strip()
+            rows = ddb.query(TableName=stats, KeyConditionExpression="contact_id = :c",
+                             ExpressionAttributeValues={":c": {"S": cid}})["Items"]
+            for r in rows:
+                ddb.delete_item(TableName=stats, Key={"contact_id": r["contact_id"], "bucket": r["bucket"]})
+            print(f"reset    {cid:<10} {len(rows)} stats row(s) deleted")
 
     for raw in args.history:
         cid, bucket, sent, responses, latency = [p.strip() for p in raw.split("|")]
