@@ -558,8 +558,6 @@ CLAIM_YOURS = Template(_page("You’re going", """
 <h2>$name’s medical notes</h2>
 <p class="muted">Released because you’re going. $name is told you opened this.</p>
 $record
-<hr>
-<p><strong>Ambulance: <a href="tel:112">112</a></strong></p>
 """))
 
 CLAIM_TAKEN = Template(_page("$claimer is already on the way", """
