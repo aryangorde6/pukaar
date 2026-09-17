@@ -401,7 +401,7 @@ p { margin: 0 0 var(--space-4); }
 hr { border: 0; border-top: 2px solid var(--border); margin: var(--space-6) 0; }
 .foot { margin-top: var(--space-12); font-size: var(--text-sm); color: var(--ink-muted); }
 .foot a { color: inherit; }
-a[href^="tel:"] { display: inline-block; min-height: 48px; line-height: 48px; padding: 0 var(--space-3);
+a[href^="tel:"] { color: inherit; display: inline-block; min-height: 48px; line-height: 48px; padding: 0 var(--space-3);
   margin: -14px calc(-1 * var(--space-3)); font-weight: 700; text-underline-offset: 4px; }
 a:focus-visible { outline: 4px solid var(--ink); outline-offset: 3px; border-radius: 6px; }
 [hidden] { display: none !important; }

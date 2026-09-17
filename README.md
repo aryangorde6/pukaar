@@ -28,6 +28,16 @@ Pukaar replaces the sequence with a fan-out. One press pages the three people mo
 6. **The winner's page opens her sealed medical notes** — blood group, medication, allergy, a daughter's number — decrypted from a KMS customer-managed key for that one person, and her screen says *"Ravi has your medical notes."*
 7. **Her screen updates by itself** (`GET /status`, polled every 3 s): *✓ Ravi is coming*. A Cancel button stays on it; she may be fine after all.
 
+<p align="center">
+  <img src="docs/01-her-button.png" width="19%" alt="Her screen: one button, I NEED HELP, and who will be told">
+  <img src="docs/02-the-alert.png" width="19%" alt="The alert a contact opens: EMERGENCY, her name, address, Open in maps, I'm going now">
+  <img src="docs/03-youre-going.png" width="19%" alt="After claiming: You're going, the address, and her sealed medical notes">
+  <img src="docs/04-already-on-the-way.png" width="19%" alt="The loser of the race: Ravi is already on the way">
+  <img src="docs/05-cancelled.png" width="19%" alt="After she cancels: Sunita cancelled this alert">
+</p>
+
+*Her button · the alert · you're going (with the notes) · already on the way · cancelled. Every text colour on these screens is at least 7.3:1 against its background; the button is 240 px tall, every other target at least 48 px.*
+
 ### Correctness properties, stated
 
 | Property | How |
