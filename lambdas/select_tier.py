@@ -57,10 +57,13 @@ def handler(event, context):
         )["Items"]
     }
 
-    if tier >= max_tier:
-        chosen = contacts
+    candidates = [c for c in contacts if c["contact_id"] not in reached]
+    if tier >= max_tier or not candidates:
+        # The last circle is everyone. If the list runs out before max_tier, this
+        # *is* the last circle: say so, so the next decision is the fallback and
+        # not an empty page that would look like nobody could be reached.
+        chosen, tier = contacts, max_tier
     else:
-        candidates = [c for c in contacts if c["contact_id"] not in reached]
         chosen = sorted(candidates, key=lambda c: (c["tier_hint"], c["proximity_m"]))[:TIER_SIZE]
 
     incident = ddb.get_item(TableName=INCIDENTS, Key={"incident_id": {"S": incident_id}})["Item"]
