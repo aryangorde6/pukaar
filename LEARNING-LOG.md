@@ -40,3 +40,14 @@ Evidence:         `curl -s -o /dev/null -w "%{http_code}" $URL` → `200`; `aws 
                   lists `FunctionURLAllowPublicAccess` and `AllowPublicFunctionUrlInvoke`. The docs page's note:
                   *"Starting in October 2025, new function URLs will require both lambda:InvokeFunctionUrl and
                   lambda:InvokeFunction permissions."* The practice stack never had a Function URL.
+
+## 2026-09-17 13:19 IST — the log's own test was green on nothing and red on the first entry
+Tried:            Run `tests/test_learning_log.py` after writing the entry above.
+Broke:            `AssertionError: 2026-09-17 13:15 is outside Thu Sep 17 13:15:39 2026 .. Sun Sep 20 20:00:00 2026`
+Wrong assumption: That `git log --reverse --format=%cI --max-count=1` prints the first commit. It prints the
+                  newest one — `--max-count` is applied before `--reverse` — so the "window" started at the
+                  commit I had just made. With zero entries the test had nothing to check and passed anyway;
+                  the first real row exposed it. That is the bug class this project audits for (a verdict
+                  from absent evidence), and it was in the auditor.
+Fix:              e166ce0 — `git rev-list --max-parents=0 HEAD` for the root commit, floor truncated to the minute.
+Evidence:         `4 passed`; the root commit is `271deb7 2026-09-17T12:56:53+05:30`, the entry above is 13:15.
