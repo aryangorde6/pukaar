@@ -99,3 +99,21 @@ Evidence:         Same shape, after: 5/5 plus one ignored page this hour scores 
                   (unit test). Live `v-180259-fanout`: tier 1 `['vaishali', 'ravi', 'anil']` vs nearest three
                   `['meena', 'vaishali', 'anil']`; SelectTier's log line carries every score and its basis
                   (`vaishali 0.775 "5/5 answered"` … `meena 0.223 "0/6 answered"`). `./verify.sh` 8/8.
+
+## 2026-09-17 18:18 IST — the Cancel button on "Ravi is coming" did nothing
+Tried:            The UI pass, walking her screens on a phone-sized viewport with a real claimed incident
+                  (`2d328bcc7fa1`, Ravi claimed at 6:17 pm).
+Broke:            `POST /cancel {"incident_id": "2d328bcc7fa1"}` → `{"status": "CLAIMED", ...}` — no error, no
+                  change. The *Coming* screen shows **Cancel — I'm OK** ("she may be fine after all, and she is
+                  allowed to say so"), and pressing it left the row `CLAIMED` and nobody told.
+Wrong assumption: That a cancel only matters before anyone claims. The conditional write accepted `OPEN` and
+                  `FALLBACK` only, and by the time someone has claimed the machine has already broadcast and
+                  finished — there is no parked token to wake, so even widening the condition would have
+                  changed the row and told no one. The button was shipped from the copy without a path behind it.
+Fix:              4ebb86b — cancel accepts `CLAIMED`; when the old status was `CLAIMED` the web function invokes
+                  `pukaar-broadcast` (`kind = false_alarm`) directly instead of waking the machine. The web role
+                  gains `lambda:InvokeFunction` on that one function and still cannot send mail itself.
+Evidence:         Same incident, after: `{"status": "CANCELLED", ..., "cancelled_at": "6:20 pm"}`; the row's
+                  `broadcast` = `{"kind": "false_alarm", "told": ["vaishali", "anil", "ravi"]}`; Ravi's claim link
+                  now renders "Sunita cancelled this alert" with no record. `./verify.sh` check 11, 11/11
+                  (`v-182122-*`).
