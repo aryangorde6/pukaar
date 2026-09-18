@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Fifteen checks against the live stack. Each asserts on rows and execution history,
+"""Sixteen checks against the live stack. Each asserts on rows and execution history,
 never on a status code alone - SUCCEEDED with nothing in the tables is a failure.
 
 Every check requires something positive to exist. A check that would pass against
@@ -377,6 +377,18 @@ check("15 a second press during an alert joins it, one incident, her page carrie
       and "var running = null" in page_idle,
       f"press -> {pressed}, press again -> {second.get('incident_id')} already={second.get('already')}; "
       f"page while open: {'carries it' if pressed in page_running else 'does not'}; cancelled -> page idle: {'var running = null' in page_idle}")
+
+# 16. where she is: a position her page sends lands on the live incident and on the page a
+#     responder opens; on a finished alert it is refused and nothing is written
+st1, p1 = http("POST", "location", json.dumps({"incident_id": a_id, "lat": 19.01765, "lon": 72.84268, "accuracy_m": 21}).encode())
+a_page = http("GET", f"claim/{plant_token(a_id, 'prakash')}")[1]
+st2, _ = http("POST", "location", json.dumps({"incident_id": b_id, "lat": 19.0, "lon": 72.8, "accuracy_m": 5}).encode())
+a_loc, b_loc = incident(a_id).get("location", {}).get("M"), incident(b_id).get("location")
+check("16 her phone's position reaches the live alert and the responder's page, never a finished one",
+      st1 == 200 and a_loc and a_loc["lat"]["N"] == "19.01765" and "Her phone, at" in a_page
+      and "maps.google.com/?q=19.01765,72.84268" in a_page and st2 == 409 and b_loc is None,
+      f"live alert -> {st1}, row lat {a_loc and a_loc['lat']['N']}, on the page: {'Her phone, at' in a_page}; "
+      f"finished alert -> {st2}, written: {b_loc is not None}")
 
 print()
 passed = sum(1 for _, ok in results if ok)
