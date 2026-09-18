@@ -217,12 +217,15 @@ a_status = wait_done(a_arn)
 a_inc, a_states = incident(a_id), states(a_arn)
 a_bc = json.loads(a_inc.get("broadcast", {}).get("S", "{}"))
 f_rows = [r for r in rows(a_id) if r["contact_tier"]["S"].endswith("#F")]
-check("4 no claim -> NextTier -> FinalFallback, everyone told",
+a_st = json.loads(http("GET", f"status/{a_id}")[1])  # what her screen polls: everyone told, nobody answered
+check("4 no claim -> NextTier -> FinalFallback, everyone told, her screen knows",
       a_status == "SUCCEEDED" and "NextTier" in a_states and "FinalFallback" in a_states
       and a_inc["status"]["S"] == "FALLBACK" and a_bc.get("kind") == "no_one_reached"
-      and len(a_bc.get("told", [])) == 6 and len(f_rows) == 6,
+      and len(a_bc.get("told", [])) == 6 and len(f_rows) == 6
+      and a_st.get("status") == "FALLBACK" and len(a_st.get("told", [])) == 6,
       f"states include NextTier={'NextTier' in a_states} FinalFallback={'FinalFallback' in a_states}; "
-      f"status {a_inc['status']['S']}; told {len(a_bc.get('told', []))}; fallback rows {len(f_rows)}")
+      f"status {a_inc['status']['S']}; told {len(a_bc.get('told', []))}; fallback rows {len(f_rows)}; "
+      f"/status {a_st.get('status')}, told {len(a_st.get('told', []))}")
 
 # 7. ranking decides membership: the nearest contact with the worst history is not in
 #    tier 1, though distance alone would put them there; they are paged at tier 2
