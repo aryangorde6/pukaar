@@ -14,7 +14,7 @@ Built solo, in the open, during Bharat Builds Tour — First Commit, 17–20 Sep
 
 ## The problem
 
-An older person living alone falls, or feels something is wrong, and has a phone. What she does with it is call one number. If it does not answer she calls the next, and each try costs a minute she is not sure she has. Most people stop after three. The son is in a meeting; the neighbour across the hall is home but was never called; nobody knows that nobody is coming.
+An older person living alone falls, or feels something is wrong, and has a phone. What she does with it is call one number. If it does not answer she calls the next, and each try costs a minute she is not sure she has. The son is in a meeting; the neighbour across the hall is home but was never called; nobody knows that nobody is coming.
 
 Ten conversations, not a study: neighbours in one building, in their late sixties to eighties, most of whom said they had the same problem. One woman said that the last time she needed someone urgently she called at least three or four people before one answered — she does not remember the exact number. Her son first, then relatives nearby; a nephew about two kilometres away came, in fifteen to twenty minutes, which she called lucky. Her nearest neighbours were out at work on weekdays; once, she called the building's watchman, and he helped. None of this is measured; it is what she said, and she agreed to be mentioned without her name.
 
