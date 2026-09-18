@@ -142,3 +142,31 @@ Evidence:         Before: `aws dynamodb scan --table-name pukaar-response-stats`
                   Function URL → "Vaishali, Anil and Ravi will be told straight away". After `./verify.sh`
                   (11/11, `v-230629-*`): the scan → exactly the three seeded rows (`vaishali 14#weekday 5/5`,
                   `ravi 4/4`, `meena 0/6`); `curl` → "Vaishali, Ravi and Anil will be told straight away".
+## 2026-09-18 19:41 IST — the incident id was all a cancel needed, and the timeline had just put it in every inbox
+Tried:            Choosing the next thing to build after `5dad4c2`, which had added *What happened, in order:
+                  …/incident/<id>* to the two messages that ask nothing of anyone (*Ravi is going*, *False
+                  alarm*), on email and Telegram, so a family could follow an alert without opening a link.
+Broke:            Nothing threw, and 18/18 was green. `POST /cancel {"incident_id"}` and `POST /location
+                  {"incident_id", lat, lon}` asked for the id and nothing else — and the id was now in the
+                  inbox of everyone reached, on Telegram, and on every settled claim page since the timeline
+                  shipped (`573494d`). Anyone paged could call off her alert (six *False alarm* messages, her
+                  screen *Cancelled*) or move her phone's position to a spot of their choosing while
+                  responders were reading it. Reproduced: `curl -X POST …/cancel -d '{"incident_id":"…"}'`
+                  → `200 {"status": "CANCELLED"}` from a shell that had never seen her page.
+Wrong assumption: That an id safe to *read* by (`GET /status/<id>`, `GET /incident/<id>`) was safe to *act*
+                  by. Her page had been the only thing that knew the id, so the id stood in for her page; the
+                  moment the id was shared for reading, the writes it guarded were shared too. The README's
+                  "the links are one-time, per incident, per person" described the responders' side only —
+                  her side had no credential at all beyond the URL of the button.
+Fix:              0dac038 — a `random_password` in Terraform, `HER_KEY` in the web function's environment,
+                  rendered into her page's script and nowhere else; `/cancel` and `/location` refuse a body
+                  without it (403, `hmac.compare_digest`), before any write. The boundary is now stated in the
+                  README: her page cancels and places her; a responder's link claims, steps back, leaves; a
+                  timeline id reads. Check 6 cancels first without the key (403, row still OPEN), check 16
+                  sends a position without it (403, nothing written); `verify.sh` and `shoot.sh` read the key
+                  from `terraform output`.
+Evidence:         `curl -X POST …/cancel -d '{"incident_id":"019d22d6b6e2"}'` → `403 {"error": "only her page
+                  can cancel"}`; the same with `"key":"x"` → 403; `…/location` without it → `403 {"error":
+                  "only her page can say where she is"}`; `curl …/` → `var key = "` once. A press and a
+                  cancel from her page in the browser (`577303261acd`, 19:47) → *Cancelled*, web log
+                  `trigger`, `cancel`, `woke`. `./verify.sh` 18/18, `v-195011-*`.
