@@ -6,6 +6,8 @@
     POST /claim/{token}   "I'm going now" - one conditional write decides the race
     POST /cancel          she is OK: mark it cancelled; the machine tells everyone
     GET  /status/{id}     what her screen shows: open, who is coming, cancelled
+    GET  /manifest.webmanifest, /icon-192.png, /icon-512.png
+                          so the button installs on her home screen as "Pukaar"
 
 GET never writes. Mail clients and link scanners fetch every link in an email;
 if a GET could claim, a corporate proxy would be on its way to Sunita instead
@@ -62,6 +64,10 @@ def handler(event, context):
         return cancel(event)
     if method == "GET" and path.startswith("/status/"):
         return status(path[len("/status/"):])
+    if method == "GET" and path == "/manifest.webmanifest":
+        return static(MANIFEST, "application/manifest+json")
+    if method == "GET" and path in ("/icon-192.png", "/icon-512.png"):
+        return static(ICONS[path], "image/png")
     return html(404, NOT_FOUND)
 
 
@@ -346,8 +352,37 @@ def jsonr(status, obj):
     }
 
 
+def static(body, content_type):
+    """The manifest and the icons: fixed bytes, cacheable for a day."""
+    return {
+        "statusCode": 200,
+        "headers": {"content-type": content_type, "cache-control": "public, max-age=86400"},
+        "body": base64.b64encode(body).decode() if isinstance(body, bytes) else body,
+        "isBase64Encoded": isinstance(body, bytes),
+    }
+
+
 def escape(s):
     return s.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+
+
+# --- home screen --------------------------------------------------------------
+
+STATIC_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "static")
+ICONS = {f"/icon-{n}.png": open(os.path.join(STATIC_DIR, f"icon-{n}.png"), "rb").read() for n in (192, 512)}
+MANIFEST = json.dumps({
+    "name": "Pukaar",
+    "short_name": "Pukaar",
+    "description": "One press. The people most likely to answer are paged at once.",
+    "start_url": "/",
+    "display": "standalone",
+    "background_color": "#FAF9F7",
+    "theme_color": "#A4161A",
+    "icons": [
+        {"src": "/icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any maskable"},
+        {"src": "/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any maskable"},
+    ],
+})
 
 
 # --- pages --------------------------------------------------------------------
@@ -421,6 +456,10 @@ PAGE = Template("""<!doctype html>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="color-scheme" content="only light"><meta name="robots" content="noindex">
+<meta name="theme-color" content="#A4161A">
+<link rel="manifest" href="/manifest.webmanifest">
+<link rel="icon" href="/icon-192.png" type="image/png">
+<link rel="apple-touch-icon" href="/icon-192.png">
 <title>I need help</title>
 <style>""" + STYLE + """</style>
 </head>
