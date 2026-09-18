@@ -285,7 +285,7 @@ resource "aws_kms_alias" "record" {
 
 # Declared explicitly so retention is set. Lambda's auto-created group never expires.
 resource "aws_cloudwatch_log_group" "lambda" {
-  for_each          = merge(local.functions, { web = "web" })
+  for_each          = merge(local.functions, { web = "web", checkin = "checkin" })
   name              = "/aws/lambda/${var.prefix}-${replace(each.key, "_", "-")}"
   retention_in_days = 7
 }
@@ -345,6 +345,61 @@ resource "aws_lambda_function" "web" {
   }
 
   depends_on = [aws_cloudwatch_log_group.lambda]
+}
+
+# The weekly check-in: not in the machine, same role as the paging functions (it pages),
+# fired by a schedule. One low-stakes page to everyone on her list, so the ranking learns
+# who is reachable at which hour without waiting for an emergency.
+resource "aws_lambda_function" "checkin" {
+  function_name    = "${var.prefix}-checkin"
+  role             = aws_iam_role.lambda.arn
+  handler          = "checkin.handler"
+  runtime          = "python3.13"
+  architectures    = ["arm64"]
+  timeout          = 30 # six emails, in sequence
+  filename         = data.archive_file.lambdas.output_path
+  source_code_hash = data.archive_file.lambdas.output_base64sha256
+
+  environment {
+    variables = merge(local.lambda_env, {
+      BASE_URL           = aws_lambda_function_url.web.function_url
+      TELEGRAM_BOT_TOKEN = var.telegram_bot_token
+    })
+  }
+
+  depends_on = [aws_cloudwatch_log_group.lambda]
+}
+
+resource "aws_scheduler_schedule" "checkin" {
+  count                        = var.checkin_schedule == "" ? 0 : 1
+  name                         = "${var.prefix}-checkin"
+  schedule_expression          = var.checkin_schedule
+  schedule_expression_timezone = "Asia/Kolkata"
+  flexible_time_window {
+    mode = "OFF"
+  }
+  target {
+    arn      = aws_lambda_function.checkin.arn
+    role_arn = aws_iam_role.scheduler.arn
+    input    = jsonencode({ subject_id = var.subject_id })
+  }
+}
+
+resource "aws_iam_role" "scheduler" {
+  name = "${var.prefix}-scheduler"
+  assume_role_policy = jsonencode({
+    Version   = "2012-10-17"
+    Statement = [{ Effect = "Allow", Principal = { Service = "scheduler.amazonaws.com" }, Action = "sts:AssumeRole" }]
+  })
+}
+
+resource "aws_iam_role_policy" "scheduler" {
+  name = "invoke-checkin"
+  role = aws_iam_role.scheduler.id
+  policy = jsonencode({
+    Version   = "2012-10-17"
+    Statement = [{ Effect = "Allow", Action = "lambda:InvokeFunction", Resource = aws_lambda_function.checkin.arn }]
+  })
 }
 
 # The one public origin. Everything the subject or a responder touches is served here.

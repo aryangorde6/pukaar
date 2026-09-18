@@ -55,6 +55,14 @@ def idle_per_subject_month():
     return 0.001 * USD_PER_GB_MONTH_DDB + 0.005 * USD_PER_GB_LOGS
 
 
+def checkin_per_subject_month(people=6):
+    # The weekly check-in: one invocation, one email per person, two row writes and one
+    # counter each. 52 weeks over 12 months. Telegram is free.
+    per_week = (MEAN_BILLED_S * LAMBDA_GB * USD_PER_GB_SECOND + USD_PER_REQUEST) \
+        + people * (USD_PER_EMAIL + 3 * USD_PER_WRITE_UNIT)
+    return per_week * 52 / 12
+
+
 def fmt(usd):
     return f"${usd:.5f}"
 
@@ -71,10 +79,14 @@ def main():
     print()
     print(f"Idle, per subject per month: {fmt(idle_per_subject_month())}. "
           f"Fixed, whole system: one KMS key, ${USD_PER_KMS_KEY_MONTH:.2f}/month.")
+    print(f"The weekly check-in to her six people: {fmt(checkin_per_subject_month())} per subject per month "
+          f"(26 emails).")
     first = next(iter(SHAPES.values()))
     thousand = 1000 * (sum(incident(first).values()) + idle_per_subject_month()) + USD_PER_KMS_KEY_MONTH
+    with_checkin = thousand + 1000 * checkin_per_subject_month()
     print(f"A thousand people, one incident each a month: about ${thousand:.0f}/month "
-          f"(₹{thousand * INR_PER_USD:.0f}).")
+          f"(₹{thousand * INR_PER_USD:.0f}); with the weekly check-in, about ${with_checkin:.0f}/month "
+          f"(₹{with_checkin * INR_PER_USD:.0f}).")
 
 
 if __name__ == "__main__":

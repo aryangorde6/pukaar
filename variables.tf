@@ -54,3 +54,9 @@ variable "telegram_chat_ids" {
   type        = map(string)
   default     = {}
 }
+
+variable "checkin_schedule" {
+  description = "When the weekly check-in goes out (EventBridge Scheduler cron, IST). Empty disables it. One hour a week is one hour learned; the hour is the operator's choice."
+  type        = string
+  default     = "cron(0 18 ? * WED *)"
+}

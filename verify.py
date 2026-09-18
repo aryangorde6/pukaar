@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Twelve checks against the live stack. Each asserts on rows and execution history,
+"""Thirteen checks against the live stack. Each asserts on rows and execution history,
 never on a status code alone - SUCCEEDED with nothing in the tables is a failure.
 
 Every check requires something positive to exist. A check that would pass against
@@ -316,6 +316,39 @@ check("12 the second channel: every page row's channel matches its contact",
       len(page_rows) >= 6 and all(channel_ok(r) for r in page_rows),
       f"{len(page_rows)} page rows; on Telegram: {sorted(r['contact_id']['S'] for r in page_rows if 'telegram_message_id' in r)}; "
       f"configured: {sorted(chat_ids)}")
+
+# 13. the weekly check-in is a page: it writes a delivered row and counts a page for that hour;
+#     answered within ten minutes it counts one response, a second tap counts nothing more, a late
+#     tap counts nothing, and a check-in link can never claim an incident
+def plant_checkin(contact_id, sent_at):
+    token = secrets.token_urlsafe(24)
+    ddb.put_item(TableName=TABLES["notifications"], Item={
+        "incident_id": {"S": f"checkin-v-{RUN}"}, "contact_tier": {"S": f"{contact_id}#C"},
+        "contact_id": {"S": contact_id}, "tier": {"N": "0"}, "kind": {"S": "checkin"},
+        "token_hash": {"S": hashlib.sha256(token.encode()).hexdigest()}, "bucket": {"S": "verify"},
+        "delivered": {"BOOL": True}, "created_at": {"N": str(sent_at)}, "sent_at": {"N": str(sent_at)}})
+    return token
+before = stats()
+ping = json.loads(lam.invoke(FunctionName=f"{PREFIX}-checkin",
+                             Payload=json.dumps({"contacts": ["vaishali"]}).encode())["Payload"].read())
+ping_rows = [r for r in rows(ping.get("checkin_id", "-")) if r["contact_id"]["S"] == "vaishali"]
+now_s = int(time.time())
+tok_ok, tok_late = plant_checkin("anil", now_s), plant_checkin("sunil", now_s - 700)
+st1, b1 = http("POST", f"checkin/{tok_ok}")
+st2, b2 = http("POST", f"checkin/{tok_ok}")
+st3, b3 = http("POST", f"checkin/{tok_late}")
+st4, _ = http("GET", f"claim/{tok_ok}")
+after = stats()
+delta = {c: tuple(a - b for a, b in zip(after.get(c, (0, 0, 0)), before.get(c, (0, 0, 0)))) for c in ("vaishali", "anil", "sunil")}
+check("13 the weekly check-in is a page, answered in time counts once, late counts nothing",
+      ping.get("sent") == ["vaishali"] and len(ping_rows) == 1 and ping_rows[0].get("delivered", {}).get("BOOL")
+      and ping_rows[0].get("kind", {}).get("S") == "checkin" and delta["vaishali"][0] == 1 and delta["vaishali"][1] == 0
+      and st1 == 200 and "Thank you" in b1 and st2 == 200 and "Already counted" in b2 and delta["anil"][1] == 1
+      and st3 == 200 and "was at" in b3 and delta["sunil"][1] == 0 and st4 == 404,
+      f"{ping.get('checkin_id')}: vaishali row delivered, pages +{delta['vaishali'][0]}; anil answered -> {st1} "
+      f"{'thanks' if 'Thank you' in b1 else b1[:40]}, again -> {'already counted' if 'Already counted' in b2 else b2[:40]}, "
+      f"responses +{delta['anil'][1]}; sunil late -> {'closed' if 'was at' in b3 else b3[:40]}, responses +{delta['sunil'][1]}; "
+      f"check-in link on /claim -> {st4}")
 
 print()
 passed = sum(1 for _, ok in results if ok)

@@ -1,7 +1,7 @@
 """Every message the system sends. One render(kind, ctx) -> (subject, text, html) for
 email; render_telegram(kind, ctx) -> (text, button) for Telegram.
 
-Kinds: first_alert, widened, someone_going, false_alarm, no_one_reached.
+Kinds: first_alert, widened, someone_going, false_alarm, no_one_reached, checkin.
 Words a neighbour would not use never appear here: no "incident", "tier",
 "escalation", "claim". People are named. Every message offers 112.
 """
@@ -57,6 +57,17 @@ Nothing is needed.
 
 Sorry for the interruption, and thank you for being on her list.
 """),
+    "checkin": Template("""Not an emergency - $subject_name is fine.
+
+Her help button keeps a list of who is likely to answer at each hour, so that when
+she does press it, the right three people are called first. This is a check-in:
+if you could go to her right now, tap the link. If not, do nothing - that is a
+useful answer too.
+
+I'd be reachable now: $claim_url
+
+Nothing else is needed. Thank you for being on her list.
+"""),
     "no_one_reached": Template("""URGENT - no one has gone
 
 $subject_name pressed her help button at $pressed_at.
@@ -77,6 +88,7 @@ SUBJECT = {
     "someone_going": Template("$claimer_name is going to $subject_name — nothing needed"),
     "false_alarm": Template("False alarm — $subject_name is OK"),
     "no_one_reached": Template("URGENT: no one has reached $subject_name"),
+    "checkin": Template("Check-in from $subject_name's list — not an emergency"),
 }
 
 # Styled but plain: no centred container, system fonts, the palette from the
@@ -126,6 +138,13 @@ HTML = {
 <p style="{_P}">Nothing is needed.</p>
 <p style="{_MUTED}">Sorry for the interruption, and thank you for being on her list.</p>
 """,
+    "checkin": lambda c: f"""
+<h1 style="{_TITLE}">Not an emergency — {c['subject_name']} is fine</h1>
+<p style="{_P}">Her help button keeps a list of who is likely to answer at each hour, so that when she does press it, the right three people are called first.</p>
+<p style="{_P}">This is a check-in. <strong>If you could go to her right now</strong>, tap the button. If not, do nothing — that is a useful answer too.</p>
+<p style="margin:0 0 24px;"><a href="{c['claim_url']}" style="{_BTN}">I’D BE REACHABLE NOW</a></p>
+<p style="{_MUTED}">Nothing else is needed. Thank you for being on her list.</p>
+""",
     "no_one_reached": lambda c: f"""
 <h1 style="{_TITLE}">URGENT — no one has gone</h1>
 <p style="{_P}">{c['subject_name']} pressed her help button at <strong>{c['pressed_at']}</strong>.<br>It has been <strong>{c['minutes_ago']} minutes</strong>. No one has been able to go.</p>
@@ -159,6 +178,8 @@ $claimer_name said they're going at $claimed_at. $subject_name has been told the
 Nothing more is needed from you."""),
     "false_alarm": Template("""<b>False alarm — $subject_name is OK</b>
 She cancelled the alert at $cancelled_at. Nothing is needed. Sorry for the interruption."""),
+    "checkin": Template("""<b>Not an emergency — $subject_name is fine.</b>
+Her help button keeps a list of who is likely to answer at each hour. This is a check-in: if you could go to her right now, tap the button. If not, do nothing — that is a useful answer too."""),
     "no_one_reached": Template("""🆘 <b>URGENT — no one has gone</b>
 $subject_name pressed her help button at $pressed_at. It has been $minutes_ago minutes.
 
@@ -167,13 +188,14 @@ $address_line2
 
 Please call 112 for her now, or go if you can."""),
 }
-TELEGRAM_BUTTON = {"first_alert", "widened", "no_one_reached"}
+TELEGRAM_BUTTON = {"first_alert": "I CAN GO NOW", "widened": "I CAN GO NOW", "no_one_reached": "I CAN GO NOW",
+                   "checkin": "I’D BE REACHABLE NOW"}
 
 
 def render_telegram(kind, ctx):
-    """Returns (text, button) for one kind; button is ("I CAN GO NOW", claim_url) or None."""
+    """Returns (text, button) for one kind; button is (label, claim_url) or None."""
     text = TELEGRAM[kind].substitute({k: _esc(v) for k, v in ctx.items()})
-    return text, (("I CAN GO NOW", ctx["claim_url"]) if kind in TELEGRAM_BUTTON else None)
+    return text, ((TELEGRAM_BUTTON[kind], ctx["claim_url"]) if kind in TELEGRAM_BUTTON else None)
 
 
 def render(kind, ctx):

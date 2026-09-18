@@ -60,6 +60,8 @@ def handler(event, context):
     if path.startswith("/claim/") and method in ("GET", "POST"):
         token = path[len("/claim/"):]
         return claim_page(token) if method == "GET" else claim(token)
+    if path.startswith("/checkin/") and method in ("GET", "POST"):
+        return checkin(path[len("/checkin/"):], answer=(method == "POST"))
     if method == "POST" and path == "/cancel":
         return cancel(event)
     if method == "GET" and path.startswith("/status/"):
@@ -255,6 +257,45 @@ def count_answer(note, now):
                     UpdateExpression="ADD responses :one, total_latency_ms :ms",
                     ExpressionAttributeValues={":one": {"N": "1"},
                                                ":ms": {"N": str(max(0, now - int(note["sent_at"]["N"])) * 1000)}})
+
+
+CHECKIN_WINDOW_S = 600
+
+
+def checkin(token, answer):
+    """The weekly check-in's one page. GET asks; POST counts - within ten minutes of the send,
+    once. A check-in row has no incident, so this link can never claim anything."""
+    note = resolve_note(token)
+    if note is None or note.get("kind", {}).get("S") != "checkin":
+        return html(404, BAD_LINK)
+    contact = ddb.get_item(TableName=CONTACTS, Key={"subject_id": {"S": SUBJECT_ID},
+                                                    "contact_id": note["contact_id"]})["Item"]
+    subject = ddb.get_item(TableName=SUBJECTS, Key={"subject_id": {"S": SUBJECT_ID}})["Item"]
+    ctx = {"name": escape(subject["name"]["S"]), "you": escape(contact["name"]["S"]),
+           "sent_at": fmt_time(note["sent_at"]["N"]) if "sent_at" in note else "earlier"}
+    now = int(time.time())
+    if "responded_at" in note:
+        return html(200, CHECKIN_DONE.substitute(ctx))
+    if not answer:
+        return html(200, CHECKIN_ASK.substitute(ctx))
+    if "sent_at" in note and now - int(note["sent_at"]["N"]) > CHECKIN_WINDOW_S:
+        print(json.dumps({"component": "web", "event": "checkin_late", "checkin_id": note["incident_id"]["S"],
+                          "contact_id": note["contact_id"]["S"], "after_s": now - int(note["sent_at"]["N"])}))
+        return html(200, CHECKIN_LATE.substitute(ctx))
+    count_answer(note, now)
+    print(json.dumps({"component": "web", "event": "checkin_answered", "checkin_id": note["incident_id"]["S"],
+                      "contact_id": note["contact_id"]["S"], "bucket": note.get("bucket", {}).get("S")}))
+    return html(200, CHECKIN_THANKS.substitute(ctx))
+
+
+def resolve_note(token):
+    """Token -> its notification row, or None."""
+    if not token or len(token) > 64:
+        return None
+    rows = ddb.query(TableName=NOTIFICATIONS, IndexName="token_hash-index",
+                     KeyConditionExpression="token_hash = :h",
+                     ExpressionAttributeValues={":h": {"S": hashlib.sha256(token.encode()).hexdigest()}})["Items"]
+    return rows[0] if len(rows) == 1 else None
 
 
 def render_claim_state(note, incident, on_claim=False):
@@ -513,6 +554,9 @@ p { margin: 0 0 var(--space-4); }
 .card-emergency { background: var(--surface); border: 3px solid var(--emergency); color: var(--emergency); }
 .banner { font-size: var(--text-3xl); line-height: 1.1; font-weight: 700; letter-spacing: 0.02em;
   color: var(--emergency); margin: 0 0 var(--space-4); }
+.banner-calm { color: var(--safe); }
+.btn-safe { background: var(--safe); color: #FFFFFF; border-radius: var(--radius-btn); }
+.btn-safe:active { background: #0F3D21; }
 .lead { font-size: var(--text-lg); margin-top: calc(-1 * var(--space-4)); }
 .address { font-size: var(--text-lg); line-height: 1.5; }
 .btn-inline { display: inline-block; width: auto; min-width: var(--target-min); margin-top: 0; text-decoration: none;
@@ -741,6 +785,30 @@ CLAIM_CANCELLED = Template(_page("$name cancelled this alert", """
 CLAIM_OVER = Template(_page("This alert is over", """
 <div class="card card-over"><h1>This alert is over</h1>
 <p>It ended at <strong>$ended_at</strong>. Nothing is needed.</p></div>
+"""))
+
+CHECKIN_ASK = Template(_page("Check-in — not an emergency", """
+<p class="banner banner-calm">NOT AN EMERGENCY</p>
+<h1>$name is fine.</h1>
+<p class="lead">Her help button keeps a list of who is likely to answer at each hour, so that when she does press it, the right three people are called first.</p>
+<p>This is a check-in, $you. <strong>If you could go to her right now</strong>, say so. If not, just close this — that is a useful answer too.</p>
+<form method="post"><button class="btn btn-safe btn-claim" type="submit">I’d be reachable now</button></form>
+<p class="muted">Sent at $sent_at. Nothing else is needed.</p>
+"""))
+
+CHECKIN_THANKS = Template(_page("Thank you", """
+<div class="card card-safe"><h1>&#10003; Thank you, $you</h1>
+<p>$name’s list now knows you’d be reachable at this hour.<br>Nothing else is needed.</p></div>
+"""))
+
+CHECKIN_LATE = Template(_page("Check-in — closed", """
+<div class="card card-over"><h1>This check-in was at $sent_at</h1>
+<p>More than ten minutes ago, so it counts as not reachable then — which is fine; the next one will ask again.<br>$name is fine. Nothing is needed.</p></div>
+"""))
+
+CHECKIN_DONE = Template(_page("Already counted", """
+<div class="card card-safe"><h1>&#10003; Already counted, $you</h1>
+<p>$name is fine. Nothing else is needed.</p></div>
 """))
 
 BAD_LINK = _page("This link isn’t valid", """

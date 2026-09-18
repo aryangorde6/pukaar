@@ -3,10 +3,10 @@
 **One press. The three people most likely to answer are paged in the same instant; the first to say "I'm going" wins; everyone else is told who is coming; if nobody answers in a minute the circle widens.** An older person living alone should not have to work through a phone list while she is on the floor.
 
 - **The one design decision:** the escalation is a Step Functions state machine, not a loop in a server. A parallel `Map` pages a whole circle at once, a conditional DynamoDB write decides the race between answerers, and the machine *waits for a task token* — a claim or a cancel wakes it in about a second instead of at the next timer.
-- **What an incident costs:** about **$0.0013 (₹0.12)** when the son answers from the first circle, **$0.0039 (₹0.34)** when nobody answers and it widens to everyone. Idle is a fraction of a cent per person per month plus one $1/month key; a thousand people with one incident each come to about $6/month. Numbers from [`cost.py`](cost.py), list prices, counted off real executions.
+- **What an incident costs:** about **$0.0013 (₹0.12)** when the son answers from the first circle, **$0.0039 (₹0.34)** when nobody answers and it widens to everyone. Idle is a fraction of a cent per person per month plus one $1/month key; a thousand people with one incident each come to about $6/month, $10 with the weekly check-in. Numbers from [`cost.py`](cost.py), list prices, counted off real executions.
 - **Live:** https://jseoe3z3uew46fyd6zbceyry6u0ebdgt.lambda-url.ap-south-1.on.aws/ — pressing it pages six test mailboxes and one Telegram, all mine.
 - **Demo video:** *added at submission.*
-- **Proof it works:** [`verify.sh`](verify.sh) runs twelve checks against the live stack, each asserting on rows and execution history, never on a status code. Last run 12/12. The unit tests and `terraform validate` run on every push: [![ci](https://github.com/aryangorde6/pukaar/actions/workflows/ci.yml/badge.svg)](https://github.com/aryangorde6/pukaar/actions/workflows/ci.yml). Every break during the build is in [`LEARNING-LOG.md`](LEARNING-LOG.md) with the commit that fixed it.
+- **Proof it works:** [`verify.sh`](verify.sh) runs thirteen checks against the live stack, each asserting on rows and execution history, never on a status code. Last run 13/13. The unit tests and `terraform validate` run on every push: [![ci](https://github.com/aryangorde6/pukaar/actions/workflows/ci.yml/badge.svg)](https://github.com/aryangorde6/pukaar/actions/workflows/ci.yml). Every break during the build is in [`LEARNING-LOG.md`](LEARNING-LOG.md) with the commit that fixed it.
 
 Built solo, in the open, during Bharat Builds Tour — First Commit, 17–20 September 2026, ap-south-1.
 
@@ -52,6 +52,7 @@ Pukaar replaces the sequence with a fan-out. One press pages the three people mo
 | A claim or a cancel is acted on now, not at the tier boundary | `WaitForClaim` is `dynamodb:updateItem.waitForTaskToken`; the same write that wins the race returns the token |
 | She can cancel at any point, including after someone claimed | after a claim the machine has finished, so the web function asks the broadcast function for the false alarm directly |
 | The medical notes are ciphertext at rest and open for one person | KMS CMK, `EncryptionContext={subject_id}`, decrypt permitted to the web role only and only with a context; every opening logged |
+| A check-in link can never claim an incident | a check-in row has no incident; `/claim` answers 404 to it, and `/checkin` counts an answer once, within ten minutes of the send, never later (check 13) |
 
 ## Architecture
 
@@ -75,13 +76,14 @@ flowchart LR
   M -->|SES| R["Ravi · Vaishali · Anil<br/>one-time links"]
   R -->|GET / POST /claim/token| W
   W -->|conditional UpdateItem<br/>+ SendTaskSuccess| WT
+  SCH[EventBridge Scheduler<br/>weekly] --> CK[checkin Lambda<br/>not an emergency: could you go now?] -->|SES / Telegram| R
   W -->|kms:Decrypt, subject_id context| K[(KMS CMK)]
   W --- DDB[(DynamoDB: incidents, contacts,<br/>notifications, response_stats, subjects)]
 ```
 
-- **Compute:** seven Python 3.13 Lambdas on arm64, 128 MB, one zip. Six run inside the machine under role `pukaar-lambda` (DynamoDB, SES, one metric namespace — **no KMS**); `web` runs under `pukaar-web` (DynamoDB, start/wake the machine, invoke `broadcast`, `kms:Decrypt` — **no SES**).
+- **Compute:** eight Python 3.13 Lambdas on arm64, 128 MB, one zip. Six run inside the machine and the weekly check-in runs from an EventBridge Scheduler cron, all under role `pukaar-lambda` (DynamoDB, SES, one metric namespace — **no KMS**); `web` runs under `pukaar-web` (DynamoDB, start/wake the machine, invoke `broadcast`, `kms:Decrypt` — **no SES**).
 - **Data:** five on-demand DynamoDB tables. `notifications` stores only the **SHA-256 of the link token** (GSI `token_hash-index`); the plaintext exists in the email alone. `subjects.record` is a Binary ciphertext.
-- **Edge:** one Lambda Function URL, six routes, no API Gateway, no login (the button is hers; the links are one-time, per incident, per person).
+- **Edge:** one Lambda Function URL, seven routes, no API Gateway, no login (the button is hers; the links are one-time, per incident, per person).
 - **Channels:** email through SES, always; Telegram through the Bot API for a contact row that carries a chat id — the same message and the same link, so a person counts as reached if either channel took it. The bot token is a sensitive Terraform variable in `terraform.tfvars` (gitignored), passed only to the paging functions; the chat ids come from the same file through `seed.sh`, never from the repo.
 - **Infra:** Terraform, AWS provider 6.x, log retention 7 days, everything in [`main.tf`](main.tf).
 
@@ -100,6 +102,8 @@ near     1 / (1 + metres / 100)
 ```
 
 So a known answerer beats an unknown, an unknown beats a known non-answerer, and distance decides only between people the history cannot separate. Every page (`notify`) adds to `pages_sent` for that person and hour; every tap on a link (`web`) adds one response and its latency — once per page, win or lose, because a lost race still says they were reachable.
+
+**Between emergencies, a weekly check-in** ([`lambdas/checkin.py`](lambdas/checkin.py), EventBridge Scheduler, Wednesday 6 pm IST by default) pages everyone on her list once, on the same channels, with a message that says first that it is not an emergency and asks one thing: *if you could go to her right now, tap.* A tap within ten minutes counts as an answered page for that hour; no tap counts as a page that went unanswered — which is the honest reading of "could you go right now?" — and a tap after ten minutes counts nothing. So the ranking learns who is reachable at which hour from six low-stakes questions a week instead of from emergencies alone. The check-in's link resolves to a notification row with no incident behind it; it cannot claim anything.
 
 **What it changes, on the seeded circle** (`seed.sh`; the histories are seeded, the counters written since are real; scores as at any hour but the seeded 2 pm one, when those rows count twice):
 
@@ -126,7 +130,8 @@ ap-south-1 list prices from the AWS Price List API on 17 Sep 2026, free tiers ig
 | Nobody claims: three circles, then the fallback (38 transitions, 18 emails) | $0.00108 | $0.00007 | $0.00006 | $0.00270 | $0.00000 | **$0.00391** (₹0.34) |
 
 Idle, per subject per month: $0.00364. Fixed, whole system: one KMS key, $1.00/month.
-A thousand people, one incident each a month: about $6/month (₹525).
+The weekly check-in to her six people: $0.00396 per subject per month (26 emails).
+A thousand people, one incident each a month: about $6/month (₹525); with the weekly check-in, about $10/month (₹873).
 
 Decisions made for cost: **Standard, not Express** workflows — a parked `waitForTaskToken` costs nothing per second, and the wait is the whole product; **a Function URL, not API Gateway** — six routes, no auth layer to pay for; **arm64** Lambdas at 128 MB; **DynamoDB on-demand** — near-zero traffic between incidents; **no VPC**, so no NAT Gateway; **log retention 7 days**; **email, not SMS** — SES is about ₹0.013 a message against ₹0.20+ for Indian SMS, and sender-ID SMS needs a registration this weekend does not have; Telegram costs nothing. The largest line in the whole bill is the $1 key.
 
@@ -151,7 +156,7 @@ Also new to me this week, without a break to log: a KMS encryption context as th
 
 - **No SMS or calls.** Email, and Telegram for whoever on her list has started her bot; no SMS, because Indian sender-ID SMS needs a registration a weekend does not have, and no calls. A Telegram bot cannot message someone first, so the son has to tap *Start* once at setup — that is the consent step this channel gets for free.
 - **Dispatch, not delivery.** SES accepts the message; where Gmail files it is unobservable from this side and drifts. Every check here asserts on the send, the row and the message id.
-- **The histories in the demo are seeded.** `seed.sh` writes the 2 pm records that make the ranking visible and, on re-run, deletes everything counted since; between runs the counters are real (a real claim at 5:57 pm added `responses 1, 46 000 ms` to Ravi's `17#weekday` row, until the next reseed). A low-stakes periodic test ping — "tap to confirm you'd be reachable" — would grow real history without waiting for emergencies; it is the stated next step, not built.
+- **The histories in the demo are seeded.** `seed.sh` writes the 2 pm records that make the ranking visible and, on re-run, deletes everything counted since; between runs the counters are real (a real claim at 5:57 pm added `responses 1, 46 000 ms` to Ravi's `17#weekday` row, until the next reseed), and the weekly check-in below grows them without waiting for an emergency — one hour a week, so a year covers about fifty hours of the week, not all 168.
 - **Consent, caps and removal for contacts are designed, not built.** Nothing can add a stranger's address: subjects and contacts enter through a script the operator runs. There is no self-serve form, precisely because an open form here is an open relay.
 - **The unconscious case is not covered.** She has to press. A passive check-in backstop was cut first.
 - **One subject.** The web function serves one person's button (`SUBJECT_ID`); many subjects is a routing change, not a design change.
@@ -166,11 +171,11 @@ Commercial systems converge on this shape — [Alerto](https://alertotech.com/),
 ```bash
 terraform init && terraform apply          # AWS_PROFILE and region in variables.tf
 ./seed.sh                                  # Sunita, her six contacts, their histories, her sealed notes
-./verify.sh                                # twelve live checks; reseeds before and after
+./verify.sh                                # thirteen live checks; reseeds before and after
 .venv/bin/pytest -q                        # ranking, the learning log, the cost numbers
 ```
 
-`variables.tf` holds the sender identity (SES production access on a verified domain is assumed), `wait_s` (60 in production; every test above passes 3–25) and `max_tier`. Telegram is optional: `terraform.tfvars` (gitignored) with `telegram_bot_token` from @BotFather and `telegram_chat_ids = { ravi = "…" }`; without it, email alone.
+`variables.tf` holds the sender identity (SES production access on a verified domain is assumed), `wait_s` (60 in production; every test above passes 3–25) and `max_tier`. Telegram is optional: `terraform.tfvars` (gitignored) with `telegram_bot_token` from @BotFather and `telegram_chat_ids = { ravi = "…" }`; without it, email alone. `checkin_schedule` is the weekly check-in's cron in IST (Wednesday 6 pm by default; empty disables it); `aws lambda invoke --function-name pukaar-checkin` sends one now.
 
 ---
 
