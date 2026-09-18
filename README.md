@@ -184,7 +184,7 @@ Commercial systems converge on this shape — [Alerto](https://alertotech.com/),
 terraform init && terraform apply          # AWS_PROFILE and region in variables.tf
 ./seed.sh                                  # Sunita, her six contacts, their histories, her sealed notes
 ./verify.sh                                # eighteen live checks; reseeds before and after
-.venv/bin/pytest -q                        # ranking, the learning log, the cost numbers, every string and message
+.venv/bin/pytest -q                        # ranking, the learning log, the cost numbers, every string and message, the check count
 ```
 
 `variables.tf` holds the sender identity (SES production access on a verified domain is assumed), `wait_s` (60 in production; every test above passes 3–25) and `max_tier`. Telegram is optional: `terraform.tfvars` (gitignored) with `telegram_bot_token` from @BotFather and `telegram_chat_ids = { ravi = "…" }`; without it, email alone. `checkin_schedule` is the weekly check-in's cron in IST (Wednesday 6 pm by default; empty disables it); `aws lambda invoke --function-name pukaar-checkin` sends one now.
