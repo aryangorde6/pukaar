@@ -24,11 +24,11 @@ import boto3
 from botocore.exceptions import ClientError
 
 import telegram
+from ranking import her_list
 from templates import render, render_telegram
 
 ddb = boto3.client("dynamodb")
 ses = boto3.client("sesv2")
-CONTACTS = os.environ["CONTACTS_TABLE"]
 SUBJECTS = os.environ["SUBJECTS_TABLE"]
 INCIDENTS = os.environ["INCIDENTS_TABLE"]
 NOTIFICATIONS = os.environ["NOTIFICATIONS_TABLE"]
@@ -46,8 +46,7 @@ def handler(event, context):
     contacts = {
         r["contact_id"]["S"]: {"contact_id": r["contact_id"]["S"], "name": r["name"]["S"], "email": r["email"]["S"],
                                "telegram": r.get("telegram_chat_id", {}).get("S", "")}
-        for r in ddb.query(TableName=CONTACTS, KeyConditionExpression="subject_id = :s",
-                           ExpressionAttributeValues={":s": incident["subject_id"]})["Items"]
+        for r in her_list(incident["subject_id"]["S"])
     }
     reached_ids = {
         r["contact_id"]["S"]
@@ -90,7 +89,8 @@ def handler(event, context):
     for c in recipients:
         this_ctx = dict(ctx)
         if suffix:
-            this_ctx["claim_url"] = BASE_URL + "claim/" + new_token(incident_id, c["contact_id"], now, suffix)
+            token = new_token(incident_id, c["contact_id"], now, suffix)
+            this_ctx["claim_url"], this_ctx["leave_url"] = BASE_URL + "claim/" + token, BASE_URL + "leave/" + token
         subject_line, text, html = render(kind, this_ctx)
         try:
             ses.send_email(FromEmailAddress=SENDER, Destination={"ToAddresses": [c["email"]]},

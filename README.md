@@ -6,7 +6,7 @@
 - **What an incident costs:** about **$0.0014 (₹0.12)** when the son answers from the first circle, **$0.0039 (₹0.35)** when nobody answers and it widens to everyone. Idle is a fraction of a cent per person per month plus one $1/month key; a thousand people with one incident each come to about $6/month, $10 with the weekly check-in. Numbers from [`cost.py`](cost.py), list prices, counted off real executions.
 - **Live:** https://jseoe3z3uew46fyd6zbceyry6u0ebdgt.lambda-url.ap-south-1.on.aws/ — pressing it pages six test mailboxes and one Telegram, all mine.
 - **Demo video:** *added at submission.*
-- **Proof it works:** [`verify.sh`](verify.sh) runs seventeen checks against the live stack, each asserting on rows and execution history, never on a status code. Last run 17/17. The unit tests and `terraform validate` run on every push: [![ci](https://github.com/aryangorde6/pukaar/actions/workflows/ci.yml/badge.svg)](https://github.com/aryangorde6/pukaar/actions/workflows/ci.yml). Every break during the build is in [`LEARNING-LOG.md`](LEARNING-LOG.md) with the commit that fixed it.
+- **Proof it works:** [`verify.sh`](verify.sh) runs eighteen checks against the live stack, each asserting on rows and execution history, never on a status code. Last run 18/18. The unit tests and `terraform validate` run on every push: [![ci](https://github.com/aryangorde6/pukaar/actions/workflows/ci.yml/badge.svg)](https://github.com/aryangorde6/pukaar/actions/workflows/ci.yml). Every break during the build is in [`LEARNING-LOG.md`](LEARNING-LOG.md) with the commit that fixed it.
 
 Built solo, in the open, during Bharat Builds Tour — First Commit, 17–20 September 2026, ap-south-1.
 
@@ -63,6 +63,7 @@ Pukaar replaces the sequence with a fan-out. One press pages the three people mo
 | The one who claimed can step back, and nobody is left believing help is coming | `POST /release` is conditional on `status = CLAIMED AND claimed_by = me AND claimed_at` recent; it reopens the row, starts a second execution that resumes at the circle reached, and tells everyone contacted — with a fresh link — before the next circle is paged (check 17) |
 | The medical notes are ciphertext at rest and open for one person | KMS CMK, `EncryptionContext={subject_id}`, decrypt permitted to the web role only and only with a context; every opening logged |
 | A check-in link can never claim an incident | a check-in row has no incident; `/claim` answers 404 to it, and `/checkin` counts an answer once, within ten minutes of the send, never later (check 13) |
+| Someone who leaves her list is never paged, asked or named again | `left_at` on the contact row; `ranking.her_list()` is the one reading of the list that the machine, the broadcasts, the check-in and her screen share (check 18) |
 
 ## Architecture
 
@@ -94,7 +95,7 @@ flowchart LR
 
 - **Compute:** eight Python 3.13 Lambdas on arm64, 128 MB, one zip. Six run inside the machine and the weekly check-in runs from an EventBridge Scheduler cron, all under role `pukaar-lambda` (DynamoDB, SES, one metric namespace — **no KMS**); `web` runs under `pukaar-web` (DynamoDB, start/wake the machine, invoke `broadcast`, `kms:Decrypt` — **no SES**).
 - **Data:** five on-demand DynamoDB tables. `notifications` stores only the **SHA-256 of the link token** (GSI `token_hash-index`); the plaintext exists in the email alone. `subjects.record` is a Binary ciphertext.
-- **Edge:** one Lambda Function URL, ten routes, no API Gateway, no login (the button is hers; the links are one-time, per incident, per person).
+- **Edge:** one Lambda Function URL, eleven routes, no API Gateway, no login (the button is hers; the links are one-time, per incident, per person).
 - **Channels:** email through SES, always; Telegram through the Bot API for a contact row that carries a chat id — the same message and the same link, so a person counts as reached if either channel took it. The bot token is a sensitive Terraform variable in `terraform.tfvars` (gitignored), passed only to the paging functions; the chat ids come from the same file through `seed.sh`, never from the repo.
 - **Infra:** Terraform, AWS provider 6.x, log retention 7 days, everything in [`main.tf`](main.tf).
 
@@ -144,7 +145,7 @@ Idle, per subject per month: $0.00364. Fixed, whole system: one KMS key, $1.00/m
 The weekly check-in to her six people: $0.00396 per subject per month (26 emails).
 A thousand people, one incident each a month: about $6/month (₹527); with the weekly check-in, about $10/month (₹876).
 
-Decisions made for cost: **Standard, not Express** workflows — a parked `waitForTaskToken` costs nothing per second, and the wait is the whole product; **a Function URL, not API Gateway** — ten routes, no auth layer to pay for; **arm64** Lambdas at 128 MB; **DynamoDB on-demand** — near-zero traffic between incidents; **no VPC**, so no NAT Gateway; **log retention 7 days**; **email, not SMS** — SES is about ₹0.013 a message against ₹0.20+ for Indian SMS, and sender-ID SMS needs a registration this weekend does not have; Telegram costs nothing. The largest line in the whole bill is the $1 key.
+Decisions made for cost: **Standard, not Express** workflows — a parked `waitForTaskToken` costs nothing per second, and the wait is the whole product; **a Function URL, not API Gateway** — eleven routes, no auth layer to pay for; **arm64** Lambdas at 128 MB; **DynamoDB on-demand** — near-zero traffic between incidents; **no VPC**, so no NAT Gateway; **log retention 7 days**; **email, not SMS** — SES is about ₹0.013 a message against ₹0.20+ for Indian SMS, and sender-ID SMS needs a registration this weekend does not have; Telegram costs nothing. The largest line in the whole bill is the $1 key.
 
 ## What I learned
 
@@ -168,7 +169,7 @@ Also new to me this week, without a break to log: a KMS encryption context as th
 - **No SMS or calls.** Email, and Telegram for whoever on her list has started her bot; no SMS, because Indian sender-ID SMS needs a registration a weekend does not have, and no calls. A Telegram bot cannot message someone first, so the son has to tap *Start* once at setup — that is the consent step this channel gets for free.
 - **Dispatch, not delivery.** SES accepts the message; where Gmail files it is unobservable from this side and drifts. Every check here asserts on the send, the row and the message id.
 - **The histories in the demo are seeded.** `seed.sh` writes the 2 pm records that make the ranking visible and, on re-run, deletes everything counted since; between runs the counters are real (a real claim at 5:57 pm added `responses 1, 46 000 ms` to Ravi's `17#weekday` row, until the next reseed), and the weekly check-in below grows them without waiting for an emergency — one hour a week, so a year covers about fifty hours of the week, not all 168.
-- **Consent, caps and removal for contacts are designed, not built.** Nothing can add a stranger's address: subjects and contacts enter through a script the operator runs. There is no self-serve form, precisely because an open form here is an open relay.
+- **Consent and caps for contacts are the operator's, not built in.** Nothing can add a stranger's address: subjects and contacts enter through a script the operator runs. There is no self-serve form, precisely because an open form here is an open relay. Leaving *is* built: the foot of every message that carries a link is the way off her list (`/leave/<token>` — asks on GET, writes on POST), and from then on the ranking, the broadcasts, the check-in and her screen all read the same list and skip that person (check 18).
 - **The unconscious case is not covered.** She has to press. A passive check-in backstop was cut first.
 - **One subject.** The web function serves one person's button (`SUBJECT_ID`); many subjects is a routing change, not a design change.
 - **The record opening is logged, not gated by a second factor.** Whoever holds a winning link sees the notes. The link is one-time, per incident, per person, hashed at rest, and dies with the incident.
@@ -182,7 +183,7 @@ Commercial systems converge on this shape — [Alerto](https://alertotech.com/),
 ```bash
 terraform init && terraform apply          # AWS_PROFILE and region in variables.tf
 ./seed.sh                                  # Sunita, her six contacts, their histories, her sealed notes
-./verify.sh                                # seventeen live checks; reseeds before and after
+./verify.sh                                # eighteen live checks; reseeds before and after
 .venv/bin/pytest -q                        # ranking, the learning log, the cost numbers, every string and message
 ```
 

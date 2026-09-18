@@ -86,6 +86,7 @@ def handler(event, context):
         "minutes_ago": max(1, round((now - int(event["started_at"])) / 60)),
         "contacted_count": event["contacted_count"],
         "claim_url": f"{BASE_URL}claim/{token}",
+        "leave_url": f"{BASE_URL}leave/{token}",
     }
     subject_line, text, html = render(kind, ctx)
 

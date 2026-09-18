@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Seventeen checks against the live stack. Each asserts on rows and execution history,
+"""Eighteen checks against the live stack. Each asserts on rows and execution history,
 never on a status code alone - SUCCEEDED with nothing in the tables is a failure.
 
 Every check requires something positive to exist. A check that would pass against
@@ -420,6 +420,34 @@ check("17 the one who claimed steps back: reopened, everyone told, resumed at th
       f"her page: stepped_back={c_status.get('stepped_back')}, told {c_status.get('told')}; resumed run {r_status}: "
       f"{r_states[:3]} … tier {r_picks[0]['tier_index'] if r_picks else '-'} wait_s {r_picks[0]['wait_s'] if r_picks else '-'}, "
       f"ends {r_states[-2:]}; row now {c_after['status']['S']}")
+
+# 18. the way off her list, at the foot of every message that carries a link: GET asks and writes
+#     nothing; POST marks the contact gone, and from then on her screen stops naming them, the check-in
+#     skips them, and a fresh alert - first circle and the fallback to everyone - never reaches them.
+#     verify.sh's reseed puts them back.
+def contact(cid):
+    return ddb.get_item(TableName=TABLES["contacts"], Key={"subject_id": {"S": "sunita"}, "contact_id": {"S": cid}},
+                        ConsistentRead=True)["Item"]
+tok = plant_token(a_id, "anil")
+st0, p0 = http("GET", f"leave/{tok}")
+anil_before = contact("anil")
+st1, p1 = http("POST", f"leave/{tok}")
+anil_after = contact("anil")
+idle = http("GET", "")[1]
+ping = json.loads(lam.invoke(FunctionName=f"{PREFIX}-checkin",
+                             Payload=json.dumps({"contacts": ["anil"]}).encode())["Payload"].read())
+e_id, e_arn = start("left", wait_s=5)
+e_status = wait_done(e_arn)
+e_bc = json.loads(incident(e_id).get("broadcast", {}).get("S", "{}"))
+e_paged = sorted({r["contact_id"]["S"] for r in rows(e_id)})
+check("18 leaving her list: never paged, never asked, no longer named",
+      st0 == 200 and "Leave" in p0 and "left_at" not in anil_before and st1 == 200 and "left" in p1
+      and "left_at" in anil_after and '"Anil"' not in idle and '"Vaishali"' in idle and ping.get("sent") == []
+      and e_status == "SUCCEEDED" and e_bc.get("kind") == "no_one_reached" and len(e_bc.get("told", [])) == 5
+      and "anil" not in e_paged and len(e_paged) == 5,
+      f"GET -> {st0}, wrote nothing: {'left_at' not in anil_before}; POST -> {st1}, left_at: {'left_at' in anil_after}; "
+      f"her screen names Anil: {'Anil' in idle[idle.find('var names'):idle.find('var names') + 80]}; check-in sent {ping.get('sent')}; "
+      f"fresh alert {e_status}: paged {e_paged}, fallback told {len(e_bc.get('told', []))}")
 
 print()
 passed = sum(1 for _, ok in results if ok)

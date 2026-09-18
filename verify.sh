@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Runs the seventeen live checks in verify.py against the deployed stack, starting from
+# Runs the eighteen live checks in verify.py against the deployed stack, starting from
 # the seeded circle and histories and leaving them so: the ranking learns from every
 # page, including the ones these checks send, so each run begins from the same known
 # history and the live button is not left ranking on test pages.

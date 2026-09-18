@@ -64,6 +64,8 @@ def handler(event, context):
         return release(path[len("/release/"):])
     if path.startswith("/checkin/") and method in ("GET", "POST"):
         return checkin(path[len("/checkin/"):], answer=(method == "POST"))
+    if path.startswith("/leave/") and method in ("GET", "POST"):
+        return leave(path[len("/leave/"):], confirm=(method == "POST"))
     if method == "POST" and path == "/location":
         return location(event)
     if method == "POST" and path == "/cancel":
@@ -400,6 +402,29 @@ def checkin(token, answer):
     print(json.dumps({"component": "web", "event": "checkin_answered", "checkin_id": note["incident_id"]["S"],
                       "contact_id": note["contact_id"]["S"], "bucket": note.get("bucket", {}).get("S")}))
     return html(200, CHECKIN_THANKS.substitute(ctx))
+
+
+def leave(token, confirm):
+    """The way off her list, at the foot of every message that carries a link. GET asks; POST
+    writes `left_at` on the contact row, and every reader of her list - the ranking, the
+    broadcasts, the check-in, her screen - skips it from then on."""
+    note = resolve_note(token)
+    if note is None:
+        return html(404, BAD_LINK)
+    contact = ddb.get_item(TableName=CONTACTS, Key={"subject_id": {"S": SUBJECT_ID},
+                                                    "contact_id": note["contact_id"]}).get("Item")
+    if contact is None:
+        return html(404, BAD_LINK)
+    subject = ddb.get_item(TableName=SUBJECTS, Key={"subject_id": {"S": SUBJECT_ID}})["Item"]
+    ctx = {"name": escape(subject["name"]["S"]), "you": escape(contact["name"]["S"])}
+    if "left_at" in contact:
+        return html(200, LEAVE_DONE.substitute(ctx))
+    if not confirm:
+        return html(200, LEAVE_ASK.substitute(ctx))
+    ddb.update_item(TableName=CONTACTS, Key={"subject_id": {"S": SUBJECT_ID}, "contact_id": note["contact_id"]},
+                    UpdateExpression="SET left_at = :t", ExpressionAttributeValues={":t": {"N": str(int(time.time()))}})
+    print(json.dumps({"component": "web", "event": "left_list", "contact_id": note["contact_id"]["S"]}))
+    return html(200, LEAVE_DONE.substitute(ctx))
 
 
 def resolve_note(token):
@@ -1119,6 +1144,20 @@ CHECKIN_LATE = Template(_page("Check-in — closed", """
 CHECKIN_DONE = Template(_page("Already counted", """
 <div class="card card-safe"><h1>&#10003; Already counted, $you</h1>
 <p>$name is fine. Nothing else is needed.</p></div>
+"""))
+
+LEAVE_ASK = Template(_page("Leave $name’s list?", """
+<h1>Leave $name’s list?</h1>
+<p class="lead">$you, you are one of the people her help button can reach.</p>
+<p>If you leave, you will not be paged when she presses it, and not asked the weekly check-in. Her screen will stop naming you. She is not told why.</p>
+<form method="post"><button class="btn btn-secondary" type="submit">Take me off her list</button></form>
+<p class="muted">Changed your mind? Just close this page — nothing happens until you press the button.</p>
+"""))
+
+LEAVE_DONE = Template(_page("You’ve left $name’s list", """
+<div class="card card-over"><h1>You’ve left $name’s list</h1>
+<p>Nothing more will be sent to you.</p></div>
+<p class="muted">To be added back, the person who set up her button has to do it.</p>
 """))
 
 BAD_LINK = _page("This link isn’t valid", """

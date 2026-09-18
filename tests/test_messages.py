@@ -19,7 +19,8 @@ import web  # noqa: E402
 
 CTX = {"subject_name": "Sunita", "address_line1": "B-304, Shanti Sadan", "address_line2": "Dadar West, Mumbai",
        "pressed_at": "2:41 pm", "minutes_ago": 3, "contacted_count": 3, "claim_url": "https://example/claim/t",
-       "claimer_name": "Ravi", "claimed_at": "2:42 pm", "cancelled_at": "2:50 pm", "released_name": "Ravi"}
+       "leave_url": "https://example/leave/t", "claimer_name": "Ravi", "claimed_at": "2:42 pm", "cancelled_at": "2:50 pm",
+       "released_name": "Ravi"}
 
 
 def test_every_language_has_every_key():
@@ -49,8 +50,11 @@ def test_every_message_kind_renders_on_both_channels():
         subject, text, html = templates.render(kind, CTX)
         tg_text, button = templates.render_telegram(kind, CTX)
         assert subject and text and html and tg_text
-        if button:
+        if button:  # a message with a link also carries the way off her list
             assert button[1] == CTX["claim_url"]
+            assert CTX["leave_url"] in text and CTX["leave_url"] in html, f"{kind} has a link but no way to leave"
+        else:
+            assert CTX["leave_url"] not in text
         if button and kind != "checkin":  # every alert that asks someone to go offers 112; the check-in is not an emergency
             assert "112" in text and "112" in tg_text, f"{kind} asks someone to go without offering 112"
     assert templates.render("first_alert", {**CTX, "subject_name": "<b>"})[1].count("<b>") == 1  # text: as typed

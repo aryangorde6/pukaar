@@ -22,12 +22,11 @@ import boto3
 from botocore.exceptions import ClientError
 
 import telegram
-from ranking import bucket_for
+from ranking import bucket_for, her_list
 from templates import render, render_telegram
 
 ddb = boto3.client("dynamodb")
 ses = boto3.client("sesv2")
-CONTACTS = os.environ["CONTACTS_TABLE"]
 SUBJECTS = os.environ["SUBJECTS_TABLE"]
 NOTIFICATIONS = os.environ["NOTIFICATIONS_TABLE"]
 RESPONSE_STATS = os.environ["RESPONSE_STATS_TABLE"]
@@ -41,8 +40,7 @@ def handler(event, context):
     now = int(time.time())
     checkin_id = "checkin-" + datetime.fromtimestamp(now, IST).strftime("%Y%m%d-%H%M%S")
     subject = ddb.get_item(TableName=SUBJECTS, Key={"subject_id": {"S": subject_id}})["Item"]
-    contacts = ddb.query(TableName=CONTACTS, KeyConditionExpression="subject_id = :s",
-                         ExpressionAttributeValues={":s": {"S": subject_id}})["Items"]
+    contacts = her_list(subject_id)
     only = set((event or {}).get("contacts") or [])  # verify.py pings one person, not six
     bucket = bucket_for(now)
     sent, failed = [], []
@@ -57,7 +55,8 @@ def handler(event, context):
             "token_hash": {"S": hashlib.sha256(token.encode()).hexdigest()},
             "bucket": {"S": bucket}, "delivered": {"BOOL": False}, "created_at": {"N": str(now)},
         })
-        ctx = {"subject_name": subject["name"]["S"], "claim_url": f"{BASE_URL}checkin/{token}"}
+        ctx = {"subject_name": subject["name"]["S"], "claim_url": f"{BASE_URL}checkin/{token}",
+               "leave_url": f"{BASE_URL}leave/{token}"}
         subject_line, text, html = render("checkin", ctx)
         message_id = None
         try:

@@ -10,7 +10,8 @@ from string import Template
 
 # ctx keys used below:
 #   subject_name, address_line1, address_line2, pressed_at, minutes_ago,
-#   contacted_count, claim_url, claimer_name, claimed_at, cancelled_at, released_name
+#   contacted_count, claim_url, leave_url, claimer_name, claimed_at, cancelled_at, released_name
+# Every message that carries a link also carries the way off her list (leave_url).
 
 TEXT = {
     "first_alert": Template("""$subject_name needs help
@@ -26,6 +27,8 @@ You are one of $contacted_count people contacted. No one has gone yet.
 
 If you can't go, that's alright - others were contacted too.
 If you think this is serious, call 112.
+
+No longer want these? Leave her list: $leave_url
 """),
     "widened": Template("""Still no one has gone
 
@@ -39,6 +42,8 @@ I can go now: $claim_url
 
 You are one of $contacted_count people now contacted.
 If you can't go, please call 112 for her.
+
+No longer want these? Leave her list: $leave_url
 """),
     "someone_going": Template("""$claimer_name is going
 
@@ -61,6 +66,8 @@ I can go now: $claim_url
 
 The next people on her list are being contacted too.
 If you think this is serious, call 112.
+
+No longer want these? Leave her list: $leave_url
 """),
     "false_alarm": Template("""False alarm - $subject_name is OK
 
@@ -80,6 +87,7 @@ useful answer too.
 I'd be reachable now: $claim_url
 
 Nothing else is needed. Thank you for being on her list.
+No longer want these? Leave her list: $leave_url
 """),
     "no_one_reached": Template("""URGENT - no one has gone
 
@@ -92,6 +100,8 @@ $address_line2
 Please call 112 for her now, or go if you can.
 
 I can go now: $claim_url
+
+No longer want these? Leave her list: $leave_url
 """),
 }
 
@@ -114,6 +124,7 @@ _ADDR = f"{_H}font-size:22px;line-height:1.5;color:#14110F;margin:0 0 24px;"
 _BTN = (f"{_H}display:inline-block;background:#A4161A;color:#FFFFFF;font-size:24px;font-weight:700;"
         "text-decoration:none;padding:24px 32px;border-radius:12px;letter-spacing:0.02em;")
 _MUTED = f"{_H}font-size:18px;line-height:1.5;color:#4A4442;margin:24px 0 0;"
+_FOOT = f"{_H}font-size:15px;line-height:1.5;color:#4A4442;margin:32px 0 0;"
 
 
 def _button(ctx):
@@ -124,6 +135,10 @@ def _address(ctx):
     return f'<p style="{_ADDR}"><strong>{ctx["address_line1"]}</strong><br>{ctx["address_line2"]}</p>'
 
 
+def _leave(ctx):
+    return f'<p style="{_FOOT}">No longer want these? <a href="{ctx["leave_url"]}" style="color:#4A4442;">Leave her list</a>.</p>'
+
+
 HTML = {
     "first_alert": lambda c: f"""
 <h1 style="{_TITLE}">{c['subject_name']} needs help</h1>
@@ -132,6 +147,7 @@ HTML = {
 {_button(c)}
 <p style="{_P}">You are one of <strong>{c['contacted_count']} people</strong> contacted. <strong>No one has gone yet.</strong></p>
 <p style="{_MUTED}">If you can't go, that's alright — others were contacted too.<br>If you think this is serious, call <strong>112</strong>.</p>
+{_leave(c)}
 """,
     "widened": lambda c: f"""
 <h1 style="{_TITLE}">Still no one has gone</h1>
@@ -139,6 +155,7 @@ HTML = {
 {_address(c)}
 {_button(c)}
 <p style="{_P}">You are one of <strong>{c['contacted_count']} people</strong> now contacted.<br><strong>If you can't go, please call 112 for her.</strong></p>
+{_leave(c)}
 """,
     "someone_going": lambda c: f"""
 <h1 style="{_TITLE}">&#10003; {c['claimer_name']} is going</h1>
@@ -152,6 +169,7 @@ HTML = {
 {_address(c)}
 {_button(c)}
 <p style="{_MUTED}">The next people on her list are being contacted too.<br>If you think this is serious, call <strong>112</strong>.</p>
+{_leave(c)}
 """,
     "false_alarm": lambda c: f"""
 <h1 style="{_TITLE}">False alarm — {c['subject_name']} is OK</h1>
@@ -165,6 +183,7 @@ HTML = {
 <p style="{_P}">This is a check-in. <strong>If you could go to her right now</strong>, tap the button. If not, do nothing — that is a useful answer too.</p>
 <p style="margin:0 0 24px;"><a href="{c['claim_url']}" style="{_BTN}">I’D BE REACHABLE NOW</a></p>
 <p style="{_MUTED}">Nothing else is needed. Thank you for being on her list.</p>
+{_leave(c)}
 """,
     "no_one_reached": lambda c: f"""
 <h1 style="{_TITLE}">URGENT — no one has gone</h1>
@@ -172,6 +191,7 @@ HTML = {
 {_address(c)}
 <p style="{_P}"><strong>Please call 112 for her now</strong>, or go if you can.</p>
 {_button(c)}
+{_leave(c)}
 """,
 }
 

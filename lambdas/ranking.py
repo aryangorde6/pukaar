@@ -58,6 +58,14 @@ def score(contact, rows, bucket):
     return round(W_ANSWERS * answers + W_FAST * fast + W_NEAR * near, 3), basis
 
 
+def her_list(subject_id):
+    """The contact rows still on her list. Anyone who left it (`left_at`) is not paged, not
+    asked the weekly check-in and not named on her screen - every reader of the list comes here."""
+    return [r for r in ddb.query(TableName=CONTACTS, KeyConditionExpression="subject_id = :s",
+                                 ExpressionAttributeValues={":s": {"S": subject_id}})["Items"]
+            if "left_at" not in r]
+
+
 def rank(subject_id, now):
     """Every contact of the subject, best first, each with score and basis."""
     contacts = [
@@ -69,11 +77,7 @@ def rank(subject_id, now):
             "proximity_m": int(r["proximity_m"]["N"]),
             "home_during_day": r.get("home_during_day", {}).get("BOOL", False),
         }
-        for r in ddb.query(
-            TableName=CONTACTS,
-            KeyConditionExpression="subject_id = :s",
-            ExpressionAttributeValues={":s": {"S": subject_id}},
-        )["Items"]
+        for r in her_list(subject_id)
     ]
     bucket = bucket_for(now)
     for c in contacts:
