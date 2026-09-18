@@ -23,6 +23,7 @@ of Ravi.
 """
 
 import base64
+import gzip
 import hashlib
 import hmac
 import json
@@ -60,6 +61,19 @@ IST = timezone(timedelta(hours=5, minutes=30))
 # --- routing ------------------------------------------------------------------
 
 def handler(event, context):
+    """Route, then gzip any text page the browser can take compressed: her page is 40 KB of eleven
+    languages, styles and script, and she may be opening it on one bar of signal."""
+    resp = route(event)
+    body = resp.get("body")
+    if "gzip" in event.get("headers", {}).get("accept-encoding", "") and isinstance(body, str) \
+            and len(body) > 1024 and not resp.get("isBase64Encoded"):
+        resp["body"] = base64.b64encode(gzip.compress(body.encode())).decode()
+        resp["isBase64Encoded"] = True
+        resp["headers"] = {**resp["headers"], "content-encoding": "gzip", "vary": "accept-encoding"}
+    return resp
+
+
+def route(event):
     method = event["requestContext"]["http"]["method"]
     path = event.get("rawPath", "/")
 
