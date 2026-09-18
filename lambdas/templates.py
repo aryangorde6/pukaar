@@ -3,7 +3,7 @@ email; render_telegram(kind, ctx) -> (text, button) for Telegram.
 
 Kinds: first_alert, widened, someone_going, stepped_back, false_alarm, no_one_reached, checkin.
 Words a neighbour would not use never appear here: no "incident", "tier",
-"escalation", "claim". People are named. Every message offers 112.
+"escalation", "claim". People are named. Every message that asks someone to go offers 112.
 """
 
 from string import Template
