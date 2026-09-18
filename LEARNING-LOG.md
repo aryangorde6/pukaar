@@ -170,3 +170,29 @@ Evidence:         `curl -X POST …/cancel -d '{"incident_id":"019d22d6b6e2"}'` 
                   "only her page can say where she is"}`; `curl …/` → `var key = "` once. A press and a
                   cancel from her page in the browser (`577303261acd`, 19:47) → *Cancelled*, web log
                   `trigger`, `cancel`, `woke`. `./verify.sh` 18/18, `v-195011-*`.
+
+## 2026-09-19 01:05 IST — "refreshing itself" meant a meta refresh, and axe calls that critical
+Tried:            An accessibility pass on every page a person can open, with axe-core 4.10.2 loaded into
+                  the live pages from the browser, every rule set it has including best-practice — the README
+                  now states the page's design rules, so each one should survive a tool.
+Broke:            Her page: `region [moderate]: .foot` — the *Not working? Call 112* line sat outside any
+                  landmark, and the responder pages had no landmark at all (`<body>` → content → `.foot`).
+                  The timeline: `meta-refresh [critical]: meta[http-equiv="refresh"]` — the page reloaded
+                  itself every five seconds while the alert was open, which throws a screen reader back to
+                  the top each time (WCAG 2.2.1 / 3.2.5). It also stopped one refresh too early: the row
+                  closes on the claim or the cancel, and the line *everyone was told* is written a second or
+                  two later, so the last thing the open page ever showed was one line short.
+Wrong assumption: That "the page refreshes itself" was a harmless way to keep a timeline live, and that
+                  landmarks were a formality on a one-screen page. A reload is a navigation; for someone
+                  listening to the page rather than looking at it, it is the whole page again, every five
+                  seconds, for as long as the alert runs.
+Fix:              750968b — `<header>`, `<main>`, `<footer>` on every page (`_page`, her page, the 404); the
+                  timeline fetches itself every 5 s and appends only the lines it does not have (the card
+                  and the list are `aria-live="polite"`), stops when the row settles, and takes one last look
+                  5 s later for the broadcast line.
+Evidence:         Same document, no reload: a marker set on `window` at load survived a claim — three lines
+                  appended, the card flipped to *✓ Ravi went*; and survived a cancel on a second alert — the
+                  false-alarm line landed on the last look (`shot-010403-axe`, `shot-011028-axe2`). axe after
+                  the fix: 0 violations on her page in all six states, the alert, *You're going*, *already on
+                  the way*, *cancelled*, the check-in ask and counted pages, the leave page, the timeline open /
+                  claimed / cancelled, the 404. `./verify.sh` 18/18, `v-011325-*`.
