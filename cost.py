@@ -24,16 +24,16 @@ INR_PER_USD = 88                    # assumed, for the rupee column only
 LAMBDA_GB = 0.125                   # 128 MB, every function
 MEAN_BILLED_S = 0.5                 # CloudWatch REPORT lines, 17 Sep: 130-785 ms across functions
 
-# From the live stack, 17 Sep 2026. Transitions and machine invocations are counted
+# From the live stack, 17-18 Sep 2026 (the Start choice added one transition on 18 Sep). Transitions and machine invocations are counted
 # from the execution history and emails are the notification rows written; page
 # polls and DynamoDB request units are estimates, and they are the smallest lines.
 SHAPES = {
     "Ravi claims at the first circle": dict(
-        execution="v-182122-claim", transitions=13, machine_invocations=7, emails=6,
+        execution="v-163958-claim", transitions=14, machine_invocations=7, emails=6,
         web_invocations=20,  # 1 press, ~15 status polls at 3 s until the claim, claim page + press, 2 refreshes
         kms_requests=2, writes=25, reads=45),
     "Nobody claims: three circles, then the fallback": dict(
-        execution="cost-182725", transitions=38, machine_invocations=20, emails=18,
+        execution="cost-182725", transitions=39, machine_invocations=20, emails=18,
         web_invocations=45,  # 1 press, ~40 polls over two minutes, a few opened links
         kms_requests=0, writes=60, reads=120),
 }

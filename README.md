@@ -3,7 +3,7 @@
 **One press. The three people most likely to answer are paged in the same instant; the first to say "I'm going" wins; everyone else is told who is coming; if nobody answers in a minute the circle widens.** An older person living alone should not have to work through a phone list while she is on the floor.
 
 - **The one design decision:** the escalation is a Step Functions state machine, not a loop in a server. A parallel `Map` pages a whole circle at once, a conditional DynamoDB write decides the race between answerers, and the machine *waits for a task token* — a claim or a cancel wakes it in about a second instead of at the next timer.
-- **What an incident costs:** about **$0.0013 (₹0.12)** when the son answers from the first circle, **$0.0039 (₹0.34)** when nobody answers and it widens to everyone. Idle is a fraction of a cent per person per month plus one $1/month key; a thousand people with one incident each come to about $6/month, $10 with the weekly check-in. Numbers from [`cost.py`](cost.py), list prices, counted off real executions.
+- **What an incident costs:** about **$0.0014 (₹0.12)** when the son answers from the first circle, **$0.0039 (₹0.35)** when nobody answers and it widens to everyone. Idle is a fraction of a cent per person per month plus one $1/month key; a thousand people with one incident each come to about $6/month, $10 with the weekly check-in. Numbers from [`cost.py`](cost.py), list prices, counted off real executions.
 - **Live:** https://jseoe3z3uew46fyd6zbceyry6u0ebdgt.lambda-url.ap-south-1.on.aws/ — pressing it pages six test mailboxes and one Telegram, all mine.
 - **Demo video:** *added at submission.*
 - **Proof it works:** [`verify.sh`](verify.sh) runs seventeen checks against the live stack, each asserting on rows and execution history, never on a status code. Last run 17/17. The unit tests and `terraform validate` run on every push: [![ci](https://github.com/aryangorde6/pukaar/actions/workflows/ci.yml/badge.svg)](https://github.com/aryangorde6/pukaar/actions/workflows/ci.yml). Every break during the build is in [`LEARNING-LOG.md`](LEARNING-LOG.md) with the commit that fixed it.
@@ -127,18 +127,18 @@ The record renders on exactly one page: the claim page in its *You're going* sta
 
 ## Cost
 
-ap-south-1 list prices from the AWS Price List API on 17 Sep 2026, free tiers ignored; transitions, machine invocations and emails counted off real executions of this stack (`v-182122-claim`, `cost-182725`). [`cost.py`](cost.py) prints this table and [`tests/test_cost_numbers.py`](tests/test_cost_numbers.py) fails if the README drifts from it.
+ap-south-1 list prices from the AWS Price List API on 17 Sep 2026, free tiers ignored; transitions, machine invocations and emails counted off real executions of this stack (`v-163958-claim` on 18 Sep; `cost-182725` on 17 Sep, plus the one `Start` transition every execution has had since 18 Sep). [`cost.py`](cost.py) prints this table and [`tests/test_cost_numbers.py`](tests/test_cost_numbers.py) fails if the README drifts from it.
 
 | Incident | Step Functions | Lambda | DynamoDB | SES | KMS | Total |
 | --- | --- | --- | --- | --- | --- | --- |
-| Ravi claims at the first circle (13 transitions, 6 emails) | $0.00037 | $0.00003 | $0.00002 | $0.00090 | $0.00001 | **$0.00133** (₹0.12) |
-| Nobody claims: three circles, then the fallback (38 transitions, 18 emails) | $0.00108 | $0.00007 | $0.00006 | $0.00270 | $0.00000 | **$0.00391** (₹0.34) |
+| Ravi claims at the first circle (14 transitions, 6 emails) | $0.00040 | $0.00003 | $0.00002 | $0.00090 | $0.00001 | **$0.00136** (₹0.12) |
+| Nobody claims: three circles, then the fallback (39 transitions, 18 emails) | $0.00111 | $0.00007 | $0.00006 | $0.00270 | $0.00000 | **$0.00394** (₹0.35) |
 
 Idle, per subject per month: $0.00364. Fixed, whole system: one KMS key, $1.00/month.
 The weekly check-in to her six people: $0.00396 per subject per month (26 emails).
-A thousand people, one incident each a month: about $6/month (₹525); with the weekly check-in, about $10/month (₹873).
+A thousand people, one incident each a month: about $6/month (₹527); with the weekly check-in, about $10/month (₹876).
 
-Decisions made for cost: **Standard, not Express** workflows — a parked `waitForTaskToken` costs nothing per second, and the wait is the whole product; **a Function URL, not API Gateway** — six routes, no auth layer to pay for; **arm64** Lambdas at 128 MB; **DynamoDB on-demand** — near-zero traffic between incidents; **no VPC**, so no NAT Gateway; **log retention 7 days**; **email, not SMS** — SES is about ₹0.013 a message against ₹0.20+ for Indian SMS, and sender-ID SMS needs a registration this weekend does not have; Telegram costs nothing. The largest line in the whole bill is the $1 key.
+Decisions made for cost: **Standard, not Express** workflows — a parked `waitForTaskToken` costs nothing per second, and the wait is the whole product; **a Function URL, not API Gateway** — ten routes, no auth layer to pay for; **arm64** Lambdas at 128 MB; **DynamoDB on-demand** — near-zero traffic between incidents; **no VPC**, so no NAT Gateway; **log retention 7 days**; **email, not SMS** — SES is about ₹0.013 a message against ₹0.20+ for Indian SMS, and sender-ID SMS needs a registration this weekend does not have; Telegram costs nothing. The largest line in the whole bill is the $1 key.
 
 ## What I learned
 
