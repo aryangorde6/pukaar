@@ -6,7 +6,7 @@
 - **What an incident costs:** about **$0.0013 (₹0.12)** when the son answers from the first circle, **$0.0039 (₹0.34)** when nobody answers and it widens to everyone. Idle is a fraction of a cent per person per month plus one $1/month key; a thousand people with one incident each come to about $6/month, $10 with the weekly check-in. Numbers from [`cost.py`](cost.py), list prices, counted off real executions.
 - **Live:** https://jseoe3z3uew46fyd6zbceyry6u0ebdgt.lambda-url.ap-south-1.on.aws/ — pressing it pages six test mailboxes and one Telegram, all mine.
 - **Demo video:** *added at submission.*
-- **Proof it works:** [`verify.sh`](verify.sh) runs thirteen checks against the live stack, each asserting on rows and execution history, never on a status code. Last run 13/13. The unit tests and `terraform validate` run on every push: [![ci](https://github.com/aryangorde6/pukaar/actions/workflows/ci.yml/badge.svg)](https://github.com/aryangorde6/pukaar/actions/workflows/ci.yml). Every break during the build is in [`LEARNING-LOG.md`](LEARNING-LOG.md) with the commit that fixed it.
+- **Proof it works:** [`verify.sh`](verify.sh) runs fourteen checks against the live stack, each asserting on rows and execution history, never on a status code. Last run 14/14. The unit tests and `terraform validate` run on every push: [![ci](https://github.com/aryangorde6/pukaar/actions/workflows/ci.yml/badge.svg)](https://github.com/aryangorde6/pukaar/actions/workflows/ci.yml). Every break during the build is in [`LEARNING-LOG.md`](LEARNING-LOG.md) with the commit that fixed it.
 
 Built solo, in the open, during Bharat Builds Tour — First Commit, 17–20 September 2026, ap-south-1.
 
@@ -29,6 +29,7 @@ Pukaar replaces the sequence with a fan-out. One press pages the three people mo
 5. **Someone taps "I'm going now."** One conditional `UpdateItem` — `status IN (OPEN, FALLBACK)` — decides the race; the loser's page says *"Ravi is already on the way"* by name, read from the row after the write. The winning write returns the parked token, `SendTaskSuccess` wakes the machine, and everyone reached is told who is coming. Measured: cancel → *Cancelled* in **1.0 s**, claim → everyone told in **2.8 s** including the emails.
 6. **The winner's page opens her sealed medical notes** — blood group, medication, allergy, a daughter's number — decrypted from a KMS customer-managed key for that one person, and her screen says *"Ravi has your medical notes."*
 7. **Her screen updates by itself** (`GET /status`, polled every 3 s): *✓ Ravi is coming*. Each state after the press is also read aloud in her language by the phone's own voice — she does not have to read it — and silent where the phone has no voice for that language. A Cancel button stays on it; she may be fine after all.
+8. **Afterwards, what happened, in order** (`GET /incident/<id>`, linked from every settled page a responder sees): the press, each circle's sends with one timestamp, who answered, who went, who opened her notes, the ending — every line a row this system wrote, nothing inferred, refreshing itself while the alert is open. For her family, and for anyone who was paged and wants to know.
 
 <p align="center">
   <img src="docs/01-her-button.png" width="19%" alt="Her screen: one button, I NEED HELP, and who will be told">
@@ -83,7 +84,7 @@ flowchart LR
 
 - **Compute:** eight Python 3.13 Lambdas on arm64, 128 MB, one zip. Six run inside the machine and the weekly check-in runs from an EventBridge Scheduler cron, all under role `pukaar-lambda` (DynamoDB, SES, one metric namespace — **no KMS**); `web` runs under `pukaar-web` (DynamoDB, start/wake the machine, invoke `broadcast`, `kms:Decrypt` — **no SES**).
 - **Data:** five on-demand DynamoDB tables. `notifications` stores only the **SHA-256 of the link token** (GSI `token_hash-index`); the plaintext exists in the email alone. `subjects.record` is a Binary ciphertext.
-- **Edge:** one Lambda Function URL, seven routes, no API Gateway, no login (the button is hers; the links are one-time, per incident, per person).
+- **Edge:** one Lambda Function URL, eight routes, no API Gateway, no login (the button is hers; the links are one-time, per incident, per person).
 - **Channels:** email through SES, always; Telegram through the Bot API for a contact row that carries a chat id — the same message and the same link, so a person counts as reached if either channel took it. The bot token is a sensitive Terraform variable in `terraform.tfvars` (gitignored), passed only to the paging functions; the chat ids come from the same file through `seed.sh`, never from the repo.
 - **Infra:** Terraform, AWS provider 6.x, log retention 7 days, everything in [`main.tf`](main.tf).
 
@@ -171,7 +172,7 @@ Commercial systems converge on this shape — [Alerto](https://alertotech.com/),
 ```bash
 terraform init && terraform apply          # AWS_PROFILE and region in variables.tf
 ./seed.sh                                  # Sunita, her six contacts, their histories, her sealed notes
-./verify.sh                                # thirteen live checks; reseeds before and after
+./verify.sh                                # fourteen live checks; reseeds before and after
 .venv/bin/pytest -q                        # ranking, the learning log, the cost numbers
 ```
 

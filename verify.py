@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Thirteen checks against the live stack. Each asserts on rows and execution history,
+"""Fourteen checks against the live stack. Each asserts on rows and execution history,
 never on a status code alone - SUCCEEDED with nothing in the tables is a failure.
 
 Every check requires something positive to exist. A check that would pass against
@@ -349,6 +349,18 @@ check("13 the weekly check-in is a page, answered in time counts once, late coun
       f"{'thanks' if 'Thank you' in b1 else b1[:40]}, again -> {'already counted' if 'Already counted' in b2 else b2[:40]}, "
       f"responses +{delta['anil'][1]}; sunil late -> {'closed' if 'was at' in b3 else b3[:40]}, responses +{delta['sunil'][1]}; "
       f"check-in link on /claim -> {st4}")
+
+# 14. the timeline page tells the claim incident's story from its rows, in order: the press,
+#     the first circle at one timestamp, who went, who opened her notes, the cancel, the false alarm
+st, page = http("GET", f"incident/{b_id}")
+marks = ["pressed her help button", "were told at once", "is going", "opened her medical notes", "cancelled — she is OK",
+         "false alarm"]
+positions = [page.find(m) for m in marks]
+check("14 the timeline page lists what happened, in order, from the rows",
+      st == 200 and all(p >= 0 for p in positions) and positions == sorted(positions)
+      and page.count("<li>") >= 6 and f"{PREFIX}" not in page,
+      f"{st}; {page.count('<li>')} lines; order " + ("kept" if positions == sorted(positions) else f"broken {positions}")
+      + f"; missing {[m for m, p in zip(marks, positions) if p < 0]}")
 
 print()
 passed = sum(1 for _, ok in results if ok)

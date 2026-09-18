@@ -66,6 +66,8 @@ def handler(event, context):
         return cancel(event)
     if method == "GET" and path.startswith("/status/"):
         return status(path[len("/status/"):])
+    if method == "GET" and path.startswith("/incident/"):
+        return incident_page(path[len("/incident/"):])
     if method == "GET" and path == "/manifest.webmanifest":
         return static(MANIFEST, "application/manifest+json")
     if method == "GET" and path in ("/icon-192.png", "/icon-512.png"):
@@ -298,6 +300,83 @@ def resolve_note(token):
     return rows[0] if len(rows) == 1 else None
 
 
+def incident_page(incident_id):
+    """What happened, in order, from the rows this system wrote - nothing inferred. For her
+    family afterwards, and for anyone who was paged. Refreshes itself while the alert is open."""
+    if not incident_id or len(incident_id) > 64:
+        return html(404, NOT_FOUND)
+    incident = ddb.get_item(TableName=INCIDENTS, Key={"incident_id": {"S": incident_id}},
+                            ConsistentRead=True).get("Item")
+    if incident is None:
+        return html(404, NOT_FOUND)
+    subject = ddb.get_item(TableName=SUBJECTS, Key={"subject_id": incident["subject_id"]})["Item"]
+    names = {r["contact_id"]["S"]: r["name"]["S"]
+             for r in ddb.query(TableName=CONTACTS, KeyConditionExpression="subject_id = :s",
+                                ExpressionAttributeValues={":s": incident["subject_id"]})["Items"]}
+    name = subject["name"]["S"]
+    who = lambda cid: names.get(cid, cid)
+    n = lambda item, key: int(item[key]["N"])
+    events = [(n(incident, "started_at"), 0, f"<strong>{escape(name)}</strong> pressed her help button")]
+
+    tiers = {}
+    for r in ddb.query(TableName=NOTIFICATIONS, KeyConditionExpression="incident_id = :i",
+                       ExpressionAttributeValues={":i": {"S": incident_id}})["Items"]:
+        tier = r["tier"]["N"]
+        if tier == "0":
+            continue  # a check-in or a test row, not a page of this alert
+        cid = r["contact_id"]["S"]
+        if r.get("delivered", {}).get("BOOL") and "sent_at" in r and tier != "99":  # the fallback is the broadcast line
+            tiers.setdefault(tier, []).append((n(r, "sent_at"), cid, "telegram" in r.get("channel", {}).get("S", "")))
+        elif "failed_at" in r:
+            events.append((n(r, "failed_at"), 1, f"the email to <strong>{escape(who(cid))}</strong> could not be sent"))
+        if "responded_at" in r:
+            claimer = incident.get("claimed_by", {}).get("S")
+            events.append((n(r, "responded_at"), 3, f"<strong>{escape(who(cid))}</strong> answered"
+                           + ("" if cid == claimer else f" — {escape(who(claimer))} was already going" if claimer else "")))
+    for tier, sends in sorted(tiers.items(), key=lambda kv: int(kv[0])):
+        at = min(t for t, _, _ in sends)
+        told = join_names([who(c) for _, c, _ in sorted(sends, key=lambda x: x[1])])
+        on_tg = [who(c) for _, c, tg in sends if tg]
+        lead = "" if tier == "1" else "no one had answered — "
+        line = f"{lead}<strong>{escape(told)}</strong> {'was' if len(sends) == 1 else 'were'} told at once"
+        if on_tg:
+            line += f" <span class=\"muted\">({escape(join_names(on_tg))} on Telegram too)</span>"
+        events.append((at, 1, line))
+    if "claimed_at" in incident:
+        events.append((n(incident, "claimed_at"), 4, f"&#10003; <strong>{escape(incident['claimed_by_name']['S'])}</strong> is going"))
+    if "record_opened_at" in incident:
+        events.append((n(incident, "record_opened_at"), 5,
+                       f"<strong>{escape(who(incident.get('record_opened_by', {}).get('S', '')))}</strong> opened her medical notes"))
+    bc = json.loads(incident.get("broadcast", {}).get("S", "{}"))
+    if bc.get("at"):
+        told = join_names([who(c) for c in bc.get("told", [])])
+        text = {"someone_going": f"everyone else was told <strong>{escape(incident.get('claimed_by_name', {}).get('S', ''))}</strong> is going",
+                "false_alarm": "everyone was told it was a false alarm",
+                "no_one_reached": "no one had answered — everyone on her list was told, and asked to call 112"}.get(bc.get("kind"), bc.get("kind", ""))
+        events.append((int(bc["at"]), 7, text + (f" <span class=\"muted\">({escape(told)})</span>" if told else "")))
+    if "cancelled_at" in incident:
+        events.append((n(incident, "cancelled_at"), 6, f"<strong>{escape(name)}</strong> cancelled — she is OK"))
+    if "failed_at" in incident:
+        events.append((n(incident, "failed_at"), 6, "the alert failed: " + escape(incident.get("failure", {}).get("S", "")[:120])))
+
+    status = incident["status"]["S"]
+    card = {"OPEN": ("card-emergency", "Still open", "waiting for someone to answer"),
+            "FALLBACK": ("card-emergency", "No one has answered", "everyone on her list has been told"),
+            "CLAIMED": ("card-safe", f"&#10003; {escape(incident.get('claimed_by_name', {}).get('S', ''))} went", "the alert is settled"),
+            "CANCELLED": ("card-caution", "Cancelled", "she said she was OK"),
+            "FAILED": ("card-over", "Failed", "the system could not page anyone")}.get(status, ("card-over", escape(status), ""))
+    rows_html = "".join(f"<li><time>{fmt_clock(t)}</time><span>{text}</span></li>" for t, _, text in sorted(events, key=lambda e: e[:2]))
+    return html(200, INCIDENT_PAGE.substitute(
+        name=escape(name), pressed_at=fmt_time(incident["started_at"]["N"]),
+        day=datetime.fromtimestamp(n(incident, "started_at"), IST).strftime("%-d %B"),
+        card_class=card[0], card_h1=card[1], card_p=card[2], rows=rows_html,
+        refresh='<meta http-equiv="refresh" content="5">' if status in ("OPEN", "FALLBACK") else ""))
+
+
+def fmt_clock(epoch):
+    return datetime.fromtimestamp(int(epoch), IST).strftime("%-I:%M:%S %p").lower()
+
+
 def render_claim_state(note, incident, on_claim=False):
     subject = ddb.get_item(TableName=SUBJECTS, Key={"subject_id": incident["subject_id"]})["Item"]
     status = incident["status"]["S"]
@@ -310,6 +389,7 @@ def render_claim_state(note, incident, on_claim=False):
         "address_line2": escape(", ".join(parts[2:])),
         "maps_url": "https://maps.google.com/?q=" + urllib.parse.quote(address),
         "pressed_at": fmt_time(incident["started_at"]["N"]),
+        "incident_id": incident["incident_id"]["S"],
     }
     if status in ("OPEN", "FALLBACK"):
         reached = ddb.query(TableName=NOTIFICATIONS, KeyConditionExpression="incident_id = :i",
@@ -554,6 +634,10 @@ p { margin: 0 0 var(--space-4); }
 .card-emergency { background: var(--surface); border: 3px solid var(--emergency); color: var(--emergency); }
 .banner { font-size: var(--text-3xl); line-height: 1.1; font-weight: 700; letter-spacing: 0.02em;
   color: var(--emergency); margin: 0 0 var(--space-4); }
+.timeline { list-style: none; padding: 0; margin: 0; }
+.timeline li { display: grid; grid-template-columns: 7.5rem 1fr; gap: var(--space-4); padding: var(--space-3) 0;
+  border-top: 2px solid var(--border); font-size: var(--text-lg); line-height: 1.4; }
+.timeline time { color: var(--ink-muted); font-variant-numeric: tabular-nums; white-space: nowrap; }
 .banner-calm { color: var(--safe); }
 .btn-safe { background: var(--safe); color: #FFFFFF; border-radius: var(--radius-btn); }
 .btn-safe:active { background: #0F3D21; }
@@ -739,10 +823,10 @@ PAGE = Template("""<!doctype html>
 </html>
 """)
 
-def _page(title, body):
+def _page(title, body, head=""):
     return ("""<!doctype html><html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1"><meta name="robots" content="noindex">
-<meta name="color-scheme" content="only light">
+<meta name="color-scheme" content="only light">""" + head + """
 <title>""" + title + """</title><style>""" + STYLE + """</style></head><body>
 """ + body + """
 <p class="foot">Pukaar · Ambulance: <a href="tel:112">112</a></p>
@@ -769,23 +853,34 @@ CLAIM_YOURS = Template(_page("You’re going", """
 <h2>$name’s medical notes</h2>
 <p class="muted">Released because you’re going. $name is told you opened this.</p>
 $record
+<p class="muted"><a href="/incident/$incident_id">What happened, in order</a></p>
 """))
 
 CLAIM_TAKEN = Template(_page("$claimer is already on the way", """
 <div class="card card-safe"><h1>&#10003; $claimer is already on the way</h1>
 <p>They said they were going at <strong>$claimed_at</strong>.<br>Nothing more is needed.</p></div>
 <p class="muted">Thank you for opening this.</p>
+<p class="muted"><a href="/incident/$incident_id">What happened, in order</a></p>
 """))
 
 CLAIM_CANCELLED = Template(_page("$name cancelled this alert", """
 <div class="card card-caution"><h1>&#8856; $name cancelled this alert</h1>
 <p>She marked it a false alarm at <strong>$cancelled_at</strong>.<br>Nothing is needed.</p></div>
+<p class="muted"><a href="/incident/$incident_id">What happened, in order</a></p>
 """))
 
 CLAIM_OVER = Template(_page("This alert is over", """
 <div class="card card-over"><h1>This alert is over</h1>
 <p>It ended at <strong>$ended_at</strong>. Nothing is needed.</p></div>
+<p class="muted"><a href="/incident/$incident_id">What happened, in order</a></p>
 """))
+
+INCIDENT_PAGE = Template(_page("What happened — $name, $pressed_at", """
+<h1>$name pressed her help button at $pressed_at</h1>
+<p class="lead">$day. Every line below is a row this system wrote, in the order it wrote them.</p>
+<div class="card $card_class"><h1>$card_h1</h1><p>$card_p</p></div>
+<ol class="timeline">$rows</ol>
+""", head="$refresh"))
 
 CHECKIN_ASK = Template(_page("Check-in — not an emergency", """
 <p class="banner banner-calm">NOT AN EMERGENCY</p>
