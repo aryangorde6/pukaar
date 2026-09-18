@@ -620,8 +620,21 @@ PAGE = Template("""<!doctype html>
   };
   setLang(new URLSearchParams(location.search).get("lang") || load("lang") || "en");
   document.getElementById("lang").addEventListener("click", function () { setLang(lang === "en" ? her : "en"); });
+  // Every state after the press is read aloud in her language by the phone's own voice - after
+  // her tap, so the browser allows it; silent where the phone has no voice for the language.
+  var LOCALE = {en: "en-IN", mr: "mr-IN", hi: "hi-IN", gu: "gu-IN", ta: "ta-IN", te: "te-IN", kn: "kn-IN", bn: "bn-IN", ml: "ml-IN", pa: "pa-IN", or: "or-IN"};
+  var speak = function (text) {
+    try {
+      if (!window.speechSynthesis) return;
+      var u = new SpeechSynthesisUtterance(text); u.lang = LOCALE[lang] || lang; u.rate = 0.9;
+      var v = speechSynthesis.getVoices().filter(function (v) { return v.lang.replace("_", "-").toLowerCase().indexOf(lang) === 0; })[0];
+      if (v) u.voice = v;
+      speechSynthesis.cancel(); speechSynthesis.speak(u);
+    } catch (e) {}
+  };
   var say = function (text) {
     var a = document.getElementById("announce"); a.textContent = ""; setTimeout(function () { a.textContent = text; }, 50);
+    speak(text);
   };
   var show = function (id) {
     ["idle", "sent", "failed", "coming", "cancelled"].forEach(function (s) { document.getElementById(s).hidden = (s !== id); });

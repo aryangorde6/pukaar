@@ -28,7 +28,7 @@ Pukaar replaces the sequence with a fan-out. One press pages the three people mo
 4. **The machine waits for a task token**, parked on the incident row. If nobody answers in `wait_s` seconds it wakes by timeout, checks the row, and widens to the next three. At the last circle everyone is paged, then a final *no one has reached her* email goes to the whole list.
 5. **Someone taps "I'm going now."** One conditional `UpdateItem` — `status IN (OPEN, FALLBACK)` — decides the race; the loser's page says *"Ravi is already on the way"* by name, read from the row after the write. The winning write returns the parked token, `SendTaskSuccess` wakes the machine, and everyone reached is told who is coming. Measured: cancel → *Cancelled* in **1.0 s**, claim → everyone told in **2.8 s** including the emails.
 6. **The winner's page opens her sealed medical notes** — blood group, medication, allergy, a daughter's number — decrypted from a KMS customer-managed key for that one person, and her screen says *"Ravi has your medical notes."*
-7. **Her screen updates by itself** (`GET /status`, polled every 3 s): *✓ Ravi is coming*. A Cancel button stays on it; she may be fine after all.
+7. **Her screen updates by itself** (`GET /status`, polled every 3 s): *✓ Ravi is coming*. Each state after the press is also read aloud in her language by the phone's own voice — she does not have to read it — and silent where the phone has no voice for that language. A Cancel button stays on it; she may be fine after all.
 
 <p align="center">
   <img src="docs/01-her-button.png" width="19%" alt="Her screen: one button, I NEED HELP, and who will be told">
