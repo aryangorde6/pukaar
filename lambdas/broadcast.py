@@ -68,6 +68,7 @@ def handler(event, context):
         "cancelled_at": fmt(incident["cancelled_at"]["N"]) if "cancelled_at" in incident else "",
         "contacted_count": len(reached_ids),
         "released_name": released[-1]["name"]["S"] if released else "",
+        "incident_url": BASE_URL + "incident/" + incident_id,
     }
 
     # A fresh link for anyone asked to go again; its row is the fallback's (#F) or the step-back's (#R).

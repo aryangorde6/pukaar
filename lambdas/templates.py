@@ -10,8 +10,9 @@ from string import Template
 
 # ctx keys used below:
 #   subject_name, address_line1, address_line2, pressed_at, minutes_ago,
-#   contacted_count, claim_url, leave_url, claimer_name, claimed_at, cancelled_at, released_name
-# Every message that carries a link also carries the way off her list (leave_url).
+#   contacted_count, claim_url, leave_url, claimer_name, claimed_at, cancelled_at, released_name, incident_url
+# Every message that carries a link also carries the way off her list (leave_url). The two that ask
+# for nothing - someone is going, false alarm - carry the timeline instead (incident_url).
 
 TEXT = {
     "first_alert": Template("""$subject_name needs help
@@ -51,6 +52,7 @@ $claimer_name said they're going at $claimed_at.
 $subject_name has been told they're coming.
 
 Nothing more is needed from you.
+What happened, in order: $incident_url
 
 Thank you for being on her list.
 """),
@@ -74,6 +76,7 @@ No longer want these? Leave her list: $leave_url
 She cancelled the alert at $cancelled_at.
 
 Nothing is needed.
+What happened, in order: $incident_url
 
 Sorry for the interruption, and thank you for being on her list.
 """),
@@ -139,6 +142,10 @@ def _leave(ctx):
     return f'<p style="{_FOOT}">No longer want these? <a href="{ctx["leave_url"]}" style="color:#4A4442;">Leave her list</a>.</p>'
 
 
+def _timeline(ctx):
+    return f'<p style="{_FOOT}"><a href="{ctx["incident_url"]}" style="color:#4A4442;">What happened, in order</a>.</p>'
+
+
 HTML = {
     "first_alert": lambda c: f"""
 <h1 style="{_TITLE}">{c['subject_name']} needs help</h1>
@@ -162,6 +169,7 @@ HTML = {
 <p style="{_P}"><strong>{c['claimer_name']}</strong> said they're going at <strong>{c['claimed_at']}</strong>.<br>{c['subject_name']} has been told they're coming.</p>
 <p style="{_P}">Nothing more is needed from you.</p>
 <p style="{_MUTED}">Thank you for being on her list.</p>
+{_timeline(c)}
 """,
     "stepped_back": lambda c: f"""
 <h1 style="{_TITLE}">{c['released_name']} can't go after all</h1>
@@ -176,6 +184,7 @@ HTML = {
 <p style="{_P}">She cancelled the alert at <strong>{c['cancelled_at']}</strong>.</p>
 <p style="{_P}">Nothing is needed.</p>
 <p style="{_MUTED}">Sorry for the interruption, and thank you for being on her list.</p>
+{_timeline(c)}
 """,
     "checkin": lambda c: f"""
 <h1 style="{_TITLE}">Not an emergency — {c['subject_name']} is fine</h1>
@@ -216,7 +225,7 @@ $address_line2
 You are one of $contacted_count people now contacted. If you can't go, please call 112 for her."""),
     "someone_going": Template("""✓ <b>$claimer_name is going</b>
 $claimer_name said they're going at $claimed_at. $subject_name has been told they're coming.
-Nothing more is needed from you."""),
+Nothing more is needed from you. <a href="$incident_url">What happened, in order</a>."""),
     "stepped_back": Template("""<b>$released_name can't go after all</b>
 $released_name said they were going, and now can't. No one is going to $subject_name. She pressed her help button at $pressed_at, $minutes_ago minutes ago.
 
@@ -225,7 +234,7 @@ $address_line2
 
 The next people on her list are being contacted too. If you think this is serious, call 112."""),
     "false_alarm": Template("""<b>False alarm — $subject_name is OK</b>
-She cancelled the alert at $cancelled_at. Nothing is needed. Sorry for the interruption."""),
+She cancelled the alert at $cancelled_at. Nothing is needed. Sorry for the interruption. <a href="$incident_url">What happened, in order</a>."""),
     "checkin": Template("""<b>Not an emergency — $subject_name is fine.</b>
 Her help button keeps a list of who is likely to answer at each hour. This is a check-in: if you could go to her right now, tap the button. If not, do nothing — that is a useful answer too."""),
     "no_one_reached": Template("""🆘 <b>URGENT — no one has gone</b>
