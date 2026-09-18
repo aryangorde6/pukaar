@@ -393,7 +393,9 @@ MANIFEST = json.dumps({
 
 # --- her page, in her language ------------------------------------------------
 # Only her page is translated: the people paged are younger and the pages they get are
-# English. English is served; the toggle (or ?lang=mr) switches, and the phone remembers.
+# English. English is served; ?lang=xx at setup picks her language and the phone remembers
+# it; the one pill on the page switches between English and that language, never a menu.
+# A language is these strings and one person who speaks it and has read them.
 
 STRINGS = {
     "en": {
@@ -407,7 +409,7 @@ STRINGS = {
         "has_notes": "{name} has your medical notes.", "cancelled_h1": "Cancelled",
         "cancelled_p": "Everyone has been told it was a false alarm.",
         "failed_h1": "Couldn’t send", "retry": "Try again", "call_112": "Or call 112 now.",
-        "foot": "Not working? Call", "and": " and ", "other_lang": "मराठी",
+        "foot": "Not working? Call", "and": " and ", "name": "English",
     },
     "mr": {
         "title": "मला मदत हवी आहे", "idle_h1": "मला मदत हवी आहे", "press": "मला मदत हवी आहे",
@@ -420,7 +422,20 @@ STRINGS = {
         "has_notes": "{name} यांच्याकडे तुमच्या वैद्यकीय नोंदी आहेत.", "cancelled_h1": "रद्द केले",
         "cancelled_p": "सर्वांना कळवले आहे की सगळे ठीक आहे.",
         "failed_h1": "पाठवता आले नाही", "retry": "पुन्हा प्रयत्न करा", "call_112": "किंवा आत्ताच 112 ला फोन करा.",
-        "foot": "चालत नाही? फोन करा", "and": " आणि ", "other_lang": "English",
+        "foot": "चालत नाही? फोन करा", "and": " आणि ", "name": "मराठी",
+    },
+    "hi": {
+        "title": "मुझे मदद चाहिए", "idle_h1": "मुझे मदद चाहिए", "press": "मुझे मदद चाहिए",
+        "press_busy": "मदद बुलाई जा रही है…", "press_once": "एक बार दबाएँ.",
+        "told": "{names} को तुरंत बता दिया जाएगा.",
+        "told_none": "अभी किसी को जोड़ा नहीं गया है, इसलिए यह बटन किसी तक नहीं पहुँच सकता.",
+        "sent_h1": "मदद बुलाई गई है", "sent_names": "{names} को बता दिया गया है.",
+        "waiting": "उनमें से किसी के जवाब का इंतज़ार है…", "cancel": "रद्द करें — मैं ठीक हूँ",
+        "cancelling": "रद्द किया जा रहा है…", "coming_h1": "{name} आ रहे हैं", "on_way": "रास्ते में हैं.",
+        "has_notes": "{name} के पास आपकी मेडिकल जानकारी है.", "cancelled_h1": "रद्द किया गया",
+        "cancelled_p": "सबको बता दिया गया है कि सब ठीक है.",
+        "failed_h1": "भेजा नहीं जा सका", "retry": "फिर से कोशिश करें", "call_112": "या अभी 112 पर फ़ोन करें.",
+        "foot": "काम नहीं कर रहा? फ़ोन करें", "and": " और ", "name": "हिन्दी",
     },
 }
 
@@ -510,7 +525,7 @@ PAGE = Template("""<!doctype html>
 </head>
 <body>
 <div class="sr-only" aria-live="assertive" id="announce"></div>
-<p class="langbar"><button class="btn-lang" id="lang" data-i18n="other_lang" lang="mr">मराठी</button></p>
+<p class="langbar"><button class="btn-lang" id="lang" lang="mr">मराठी</button></p>
 
 <main id="idle">
   <h1 data-i18n="idle_h1">I NEED HELP</h1>
@@ -559,22 +574,26 @@ PAGE = Template("""<!doctype html>
   var fill = function (key, name, value) {
     return t(key).replace("{" + name + "}", "<strong>" + esc(value) + "</strong>");
   };
+  var store = function (k, v) { try { localStorage.setItem(k, v); } catch (e) {} };
+  var load = function (k) { try { return localStorage.getItem(k); } catch (e) { return null; } };
+  var her = strings[load("her")] ? load("her") : "mr";
   var setLang = function (l) {
     lang = strings[l] ? l : "en";
-    try { localStorage.setItem("lang", lang); } catch (e) {}
+    if (lang !== "en") { her = lang; store("her", her); }
+    store("lang", lang);
     document.documentElement.lang = lang;
     document.title = t("title");
     Array.prototype.forEach.call(document.querySelectorAll("[data-i18n]"), function (e) { e.textContent = t(e.getAttribute("data-i18n")); });
-    document.getElementById("lang").lang = lang === "en" ? "mr" : "en";
+    var other = lang === "en" ? her : "en", pill = document.getElementById("lang");
+    pill.lang = other; pill.textContent = strings[other].name;
     document.getElementById("told").innerHTML = names.length ? fill("told", "names", joinNames(names)) : t("told_none");
     document.getElementById("sent-names").innerHTML = fill("sent_names", "names", joinNames(names));
     document.getElementById("coming-name").textContent = t("coming_h1").replace("{name}", claimer);
     document.getElementById("coming-record").innerHTML = fill("has_notes", "name", claimer);
     document.getElementById("coming-record").hidden = !hasNotes;
   };
-  var wanted = (new URLSearchParams(location.search).get("lang")) || (function () { try { return localStorage.getItem("lang"); } catch (e) { return null; } })();
-  setLang(wanted || "en");
-  document.getElementById("lang").addEventListener("click", function () { setLang(lang === "en" ? "mr" : "en"); });
+  setLang(new URLSearchParams(location.search).get("lang") || load("lang") || "en");
+  document.getElementById("lang").addEventListener("click", function () { setLang(lang === "en" ? her : "en"); });
   var say = function (text) {
     var a = document.getElementById("announce"); a.textContent = ""; setTimeout(function () { a.textContent = text; }, 50);
   };
