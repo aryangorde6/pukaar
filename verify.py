@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Fourteen checks against the live stack. Each asserts on rows and execution history,
+"""Fifteen checks against the live stack. Each asserts on rows and execution history,
 never on a status code alone - SUCCEEDED with nothing in the tables is a failure.
 
 Every check requires something positive to exist. A check that would pass against
@@ -361,6 +361,22 @@ check("14 the timeline page lists what happened, in order, from the rows",
       and page.count("<li>") >= 6 and f"{PREFIX}" not in page,
       f"{st}; {page.count('<li>')} lines; order " + ("kept" if positions == sorted(positions) else f"broken {positions}")
       + f"; missing {[m for m, p in zip(marks, positions) if p < 0]}")
+
+# 15. a second press during an alert joins it: two presses on the button, one incident, and her
+#     page carries that incident until she cancels
+st1, p1 = http("POST", "trigger")
+st2, p2 = http("POST", "trigger")
+first, second = json.loads(p1), json.loads(p2)
+pressed = first.get("incident_id", "")
+page_running = http("GET", "")[1]
+st3, p3 = http("POST", "cancel", json.dumps({"incident_id": pressed}).encode())
+page_idle = http("GET", "")[1]
+check("15 a second press during an alert joins it, one incident, her page carries it",
+      st1 == 200 and st2 == 200 and pressed and second.get("incident_id") == pressed and second.get("already") is True
+      and f'var running = "{pressed}"' in page_running and st3 == 200 and json.loads(p3).get("status") == "CANCELLED"
+      and "var running = null" in page_idle,
+      f"press -> {pressed}, press again -> {second.get('incident_id')} already={second.get('already')}; "
+      f"page while open: {'carries it' if pressed in page_running else 'does not'}; cancelled -> page idle: {'var running = null' in page_idle}")
 
 print()
 passed = sum(1 for _, ok in results if ok)

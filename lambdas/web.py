@@ -128,7 +128,7 @@ def status(incident_id):
                         ConsistentRead=True).get("Item")
     if item is None:
         return jsonr(404, {"error": "no such incident"})
-    out = {"incident_id": incident_id, "status": item["status"]["S"]}
+    out = {"incident_id": incident_id, "status": item["status"]["S"], "pressed_at": fmt_time(item["started_at"]["N"])}
     if "claimed_by_name" in item:
         out["claimed_by_name"] = item["claimed_by_name"]["S"]
         out["claimed_at"] = fmt_time(item["claimed_at"]["N"])
@@ -149,11 +149,39 @@ def trigger_page():
     else:
         told = "No one has been added yet, so this button cannot reach anyone."
         disabled = "disabled"
+    running = open_incident()
     return PAGE.substitute(told=told, disabled=disabled, names_json=json.dumps(names),
+                           running_json=json.dumps(running["incident_id"]["S"] if running else None),
                            strings_json=json.dumps(STRINGS, ensure_ascii=False))
 
 
+RECENT_CLAIM_S = 1800
+
+
+def open_incident():
+    """The alert already running for her, if there is one: OPEN or FALLBACK, or claimed within
+    the last half hour - someone is on the way. A second press then returns it instead of
+    starting a second alert (a double tap, a reload, the app reopened)."""
+    subject = ddb.get_item(TableName=SUBJECTS, Key={"subject_id": {"S": SUBJECT_ID}}).get("Item", {})
+    if "open_incident" not in subject:
+        return None
+    item = ddb.get_item(TableName=INCIDENTS, Key={"incident_id": subject["open_incident"]},
+                        ConsistentRead=True).get("Item")
+    if item is None:
+        return None
+    status = item["status"]["S"]
+    if status in ("OPEN", "FALLBACK"):
+        return item
+    if status == "CLAIMED" and time.time() - int(item["claimed_at"]["N"]) < RECENT_CLAIM_S:
+        return item
+    return None
+
+
 def trigger():
+    running = open_incident()
+    if running is not None:
+        print(json.dumps({"component": "web", "event": "trigger_joined", "incident_id": running["incident_id"]["S"]}))
+        return jsonr(200, {"incident_id": running["incident_id"]["S"], "told": first_circle_names(), "already": True})
     incident_id = uuid.uuid4().hex[:12]
     payload = {
         "incident_id": incident_id,
@@ -166,6 +194,8 @@ def trigger():
         name=incident_id,
         input=json.dumps(payload),
     )
+    ddb.update_item(TableName=SUBJECTS, Key={"subject_id": {"S": SUBJECT_ID}},
+                    UpdateExpression="SET open_incident = :i", ExpressionAttributeValues={":i": {"S": incident_id}})
     print(json.dumps({"component": "web", "event": "trigger", "incident_id": incident_id,
                       "execution_arn": started["executionArn"]}))
     return jsonr(200, {"incident_id": incident_id, "told": first_circle_names()})
@@ -719,6 +749,7 @@ PAGE = Template("""<!doctype html>
 (function () {
   var names = $names_json;
   var strings = $strings_json;
+  var running = $running_json;  // an alert already open for her, if the app was reopened during one
   var incident = null, poll = null, lang = "en", claimer = "", hasNotes = false;
   var esc = function (s) { return String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;"); };
   var t = function (key) { return strings[lang][key]; };
@@ -773,6 +804,7 @@ PAGE = Template("""<!doctype html>
   var check = function () {
     if (!incident) return;
     fetch("/status/" + incident).then(function (r) { return r.json(); }).then(function (s) {
+      if (s.pressed_at && !document.getElementById("sent-time").textContent) document.getElementById("sent-time").textContent = s.pressed_at;
       if (s.status === "CLAIMED") {
         claimer = s.claimed_by_name; hasNotes = !!s.record_opened_at;
         document.getElementById("coming-name").textContent = t("coming_h1").replace("{name}", claimer);
@@ -817,6 +849,11 @@ PAGE = Template("""<!doctype html>
   document.getElementById("again").addEventListener("click", function () {
     incident = null; document.getElementById("press").disabled = false; show("idle"); press();
   });
+  if (running) {  // she reopened the app while an alert is running: show it, do not ask again
+    incident = running; document.getElementById("press").disabled = true;
+    document.getElementById("sent-names").innerHTML = fill("sent_names", "names", joinNames(names));
+    show("sent"); check(); stopPoll(); poll = setInterval(check, 3000);
+  }
 })();
 </script>
 </body>

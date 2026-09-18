@@ -6,7 +6,7 @@
 - **What an incident costs:** about **$0.0013 (₹0.12)** when the son answers from the first circle, **$0.0039 (₹0.34)** when nobody answers and it widens to everyone. Idle is a fraction of a cent per person per month plus one $1/month key; a thousand people with one incident each come to about $6/month, $10 with the weekly check-in. Numbers from [`cost.py`](cost.py), list prices, counted off real executions.
 - **Live:** https://jseoe3z3uew46fyd6zbceyry6u0ebdgt.lambda-url.ap-south-1.on.aws/ — pressing it pages six test mailboxes and one Telegram, all mine.
 - **Demo video:** *added at submission.*
-- **Proof it works:** [`verify.sh`](verify.sh) runs fourteen checks against the live stack, each asserting on rows and execution history, never on a status code. Last run 14/14. The unit tests and `terraform validate` run on every push: [![ci](https://github.com/aryangorde6/pukaar/actions/workflows/ci.yml/badge.svg)](https://github.com/aryangorde6/pukaar/actions/workflows/ci.yml). Every break during the build is in [`LEARNING-LOG.md`](LEARNING-LOG.md) with the commit that fixed it.
+- **Proof it works:** [`verify.sh`](verify.sh) runs fifteen checks against the live stack, each asserting on rows and execution history, never on a status code. Last run 15/15. The unit tests and `terraform validate` run on every push: [![ci](https://github.com/aryangorde6/pukaar/actions/workflows/ci.yml/badge.svg)](https://github.com/aryangorde6/pukaar/actions/workflows/ci.yml). Every break during the build is in [`LEARNING-LOG.md`](LEARNING-LOG.md) with the commit that fixed it.
 
 Built solo, in the open, during Bharat Builds Tour — First Commit, 17–20 September 2026, ap-south-1.
 
@@ -23,7 +23,7 @@ Pukaar replaces the sequence with a fan-out. One press pages the three people mo
 ## What happens when she presses
 
 1. **Her screen** (`GET /`) is one button. It already says who will be told — *"Vaishali, Ravi and Anil will be told straight away"* — read from the same ranking the machine will use. It installs on her home screen as *Pukaar* (`/manifest.webmanifest`, two PNG icons served by the same function), so the button is an icon, not an address to type. It speaks her language: `?lang=mr` once, at setup, and every word on her screen is Marathi — *मला मदत हवी आहे*; the phone remembers, and the one pill on the page switches between English and her language, never a menu. Ten languages besides English: Marathi and Hindi were read by someone who speaks them; Gujarati, Tamil, Telugu, Kannada, Bengali, Malayalam, Punjabi and Odia are drafts checked by machine translation only, waiting for a reader — which is one reason English stays one tap away on every screen. A language is twenty-two strings in [`web.py`](lambdas/web.py). Only her page is translated; the people paged are younger, and their pages and emails stay English.
-2. **The press** (`POST /trigger`) starts one execution of `pukaar-escalation`, named after the incident, so a retried request cannot start the same incident twice; the button disables itself on press.
+2. **The press** (`POST /trigger`) starts one execution of `pukaar-escalation`, named after the incident, so a retried request cannot start the same incident twice; the button disables itself on press. A second press while an alert is running — a double tap, a reload, the app reopened — joins that alert instead of starting another, and her page reopened during one shows it.
 3. **The circle is paged at once.** `SelectTier` ranks everyone on her list and takes the top three not yet reached; a parallel `Map` sends each of them an email with a one-time link — and the same link on Telegram, as a button, to anyone who has started her bot (the son, in the demo). In the execution history the three sends carry the same timestamp (`13:22:59.690` on the first live run).
 4. **The machine waits for a task token**, parked on the incident row. If nobody answers in `wait_s` seconds it wakes by timeout, checks the row, and widens to the next three. At the last circle everyone is paged, then a final *no one has reached her* email goes to the whole list.
 5. **Someone taps "I'm going now."** One conditional `UpdateItem` — `status IN (OPEN, FALLBACK)` — decides the race; the loser's page says *"Ravi is already on the way"* by name, read from the row after the write. The winning write returns the parked token, `SendTaskSuccess` wakes the machine, and everyone reached is told who is coming. Measured: cancel → *Cancelled* in **1.0 s**, claim → everyone told in **2.8 s** including the emails.
@@ -48,6 +48,7 @@ Pukaar replaces the sequence with a fan-out. One press pages the three people mo
 | A circle is paged in the same instant, not in sequence | `NotifyTier` is a `Map`, not a chain of tasks |
 | Two people answering at once produce exactly one winner, and the loser learns who | one conditional write on the incident row; the page renders from the row after the write, never from what the request hoped |
 | Re-running a send never pages twice | the notification row is written first with `attribute_not_exists`; a retry that finds it delivered sends nothing |
+| A second press during an alert does not start a second alert | `POST /trigger` returns the alert already running for her — open, widened, or claimed within the last half hour — instead of starting another; her page, reopened, shows that alert (check 15) |
 | A link that is prefetched by a mail scanner claims nothing | **GET never writes.** Claim links render on GET and claim on POST; the button is the claim |
 | A circle that reached nobody fails loudly | one bad address is contained to its iteration; a whole circle with zero deliveries goes to `RecordFailure`, the execution fails, and a metric fires — no silent minute of waiting |
 | A claim or a cancel is acted on now, not at the tier boundary | `WaitForClaim` is `dynamodb:updateItem.waitForTaskToken`; the same write that wins the race returns the token |
@@ -172,7 +173,7 @@ Commercial systems converge on this shape — [Alerto](https://alertotech.com/),
 ```bash
 terraform init && terraform apply          # AWS_PROFILE and region in variables.tf
 ./seed.sh                                  # Sunita, her six contacts, their histories, her sealed notes
-./verify.sh                                # fourteen live checks; reseeds before and after
+./verify.sh                                # fifteen live checks; reseeds before and after
 .venv/bin/pytest -q                        # ranking, the learning log, the cost numbers
 ```
 
