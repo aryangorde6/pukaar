@@ -6,7 +6,11 @@
         --contact "ravi|Ravi|son|ravi@example.com|1|4200|no" \
         --contact "meena|Meena|neighbour, same floor|meena@example.com|2|8|no"
 
-Contact fields: id|name|relation|email|tier_hint|proximity_m|home_during_day(yes/no)
+Contact fields: id|name|relation|email|tier_hint|proximity_m|home_during_day(yes/no)[|telegram_chat_id]
+
+The eighth field is optional: the Telegram chat id of someone who has started her bot,
+so they are paged there as well as by email. Chat ids are operator data, not repo data:
+seed.sh reads them from the Terraform variable telegram_chat_ids (terraform.tfvars).
 
 Addresses are arguments on purpose: the consent flow that would let anyone add an
 address is not built, so nothing here can be pointed at a stranger.
@@ -39,7 +43,7 @@ def main():
     ap.add_argument("--address", required=True)
     ap.add_argument("--phone", default="")
     ap.add_argument("--record", default="", help="medical notes, '|' between lines; sealed with KMS")
-    ap.add_argument("--contact", action="append", default=[], help="id|name|relation|email|tier_hint|proximity_m|home_during_day")
+    ap.add_argument("--contact", action="append", default=[], help="id|name|relation|email|tier_hint|proximity_m|home_during_day[|telegram_chat_id]")
     ap.add_argument("--history", action="append", default=[], help="id|bucket|pages_sent|responses|total_latency_ms")
     ap.add_argument("--reset-history", action="store_true", help="delete the listed contacts' stats rows first")
     args = ap.parse_args()
@@ -66,7 +70,8 @@ def main():
     print(f"subject  {args.subject}: {args.name}" + (f", record sealed ({len(item['record']['B'])} bytes)" if args.record else ""))
 
     for raw in args.contact:
-        cid, name, relation, email, tier, prox, home = [p.strip() for p in raw.split("|")]
+        cid, name, relation, email, tier, prox, home, *rest = [p.strip() for p in raw.split("|")]
+        chat_id = rest[0] if rest else ""
         ddb.put_item(
             TableName=f"{args.prefix}-contacts",
             Item={
@@ -79,9 +84,10 @@ def main():
                 "proximity_m": {"N": prox},
                 "home_during_day": {"BOOL": home.lower() == "yes"},
                 "created_at": {"N": now},
+                **({"telegram_chat_id": {"S": chat_id}} if chat_id else {}),
             },
         )
-        print(f"contact  {cid:<10} {name:<10} tier {tier}  {prox:>5} m  {email}")
+        print(f"contact  {cid:<10} {name:<10} tier {tier}  {prox:>5} m  {email}" + ("  + telegram" if chat_id else ""))
 
     if args.reset_history:
         stats = f"{args.prefix}-response-stats"

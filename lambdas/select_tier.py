@@ -72,7 +72,7 @@ def handler(event, context):
     return {
         **event,
         "tier_index": tier,
-        "contacts": [{k: c[k] for k in ("contact_id", "name", "email")} for c in chosen],
+        "contacts": [{k: c[k] for k in ("contact_id", "name", "email", "telegram")} for c in chosen],
         "ranking": ranking,
         "contacted_count": len(reached | {c["contact_id"] for c in chosen}),
         "subject": {"name": subject["name"]["S"], "address": subject["address"]["S"]},

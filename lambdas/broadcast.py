@@ -5,7 +5,9 @@
     kind = no_one_reached   everyone on her list, with a fresh link each: please call 112, or go
 
 Sends are best-effort per person: one bad address is logged on its row and does
-not stop the others. The state fails only if nobody at all could be told.
+not stop the others. Anyone who has her Telegram bot is told there as well; a person
+counts as told if either channel took it. The state fails only if nobody at all
+could be told.
 """
 
 import hashlib
@@ -18,7 +20,8 @@ from datetime import datetime, timedelta, timezone
 import boto3
 from botocore.exceptions import ClientError
 
-from templates import render
+import telegram
+from templates import render, render_telegram
 
 ddb = boto3.client("dynamodb")
 ses = boto3.client("sesv2")
@@ -38,7 +41,8 @@ def handler(event, context):
     incident = ddb.get_item(TableName=INCIDENTS, Key={"incident_id": {"S": incident_id}}, ConsistentRead=True)["Item"]
     subject = ddb.get_item(TableName=SUBJECTS, Key={"subject_id": incident["subject_id"]})["Item"]
     contacts = {
-        r["contact_id"]["S"]: {"contact_id": r["contact_id"]["S"], "name": r["name"]["S"], "email": r["email"]["S"]}
+        r["contact_id"]["S"]: {"contact_id": r["contact_id"]["S"], "name": r["name"]["S"], "email": r["email"]["S"],
+                               "telegram": r.get("telegram_chat_id", {}).get("S", "")}
         for r in ddb.query(TableName=CONTACTS, KeyConditionExpression="subject_id = :s",
                            ExpressionAttributeValues={":s": incident["subject_id"]})["Items"]
     }
@@ -83,9 +87,14 @@ def handler(event, context):
                            Content={"Simple": {"Subject": {"Data": subject_line, "Charset": "UTF-8"},
                                                "Body": {"Text": {"Data": text, "Charset": "UTF-8"},
                                                         "Html": {"Data": html, "Charset": "UTF-8"}}}})
-            told.append(c["contact_id"])
+            emailed = True
         except ClientError as e:
-            failed.append({"contact_id": c["contact_id"], "reason": e.response["Error"]["Code"]})
+            emailed, reason = False, e.response["Error"]["Code"]
+        on_telegram = bool(c["telegram"] and telegram.send(c["telegram"], *render_telegram(kind, this_ctx)))
+        if emailed or on_telegram:
+            told.append(c["contact_id"])
+        else:
+            failed.append({"contact_id": c["contact_id"], "reason": reason})
 
     ddb.update_item(TableName=INCIDENTS, Key={"incident_id": {"S": incident_id}},
                     UpdateExpression="SET broadcast = :b",

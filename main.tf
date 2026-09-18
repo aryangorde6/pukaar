@@ -304,7 +304,8 @@ resource "aws_lambda_function" "fn" {
 
   environment {
     variables = merge(local.lambda_env, {
-      BASE_URL = aws_lambda_function_url.web.function_url
+      BASE_URL           = aws_lambda_function_url.web.function_url
+      TELEGRAM_BOT_TOKEN = var.telegram_bot_token # the paging functions only; web never sends
     })
   }
 
@@ -649,4 +650,8 @@ moved {
 
 output "record_key" {
   value = aws_kms_alias.record.name
+}
+
+output "telegram_chat_ids" {
+  value = var.telegram_chat_ids # read by seed.sh, so the ids never sit in the repo
 }

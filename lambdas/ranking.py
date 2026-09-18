@@ -65,6 +65,7 @@ def rank(subject_id, now):
             "contact_id": r["contact_id"]["S"],
             "name": r["name"]["S"],
             "email": r["email"]["S"],
+            "telegram": r.get("telegram_chat_id", {}).get("S", ""),
             "proximity_m": int(r["proximity_m"]["N"]),
             "home_during_day": r.get("home_during_day", {}).get("BOOL", False),
         }

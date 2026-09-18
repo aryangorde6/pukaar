@@ -6,12 +6,14 @@
 # away, Meena - 8 m away - has never answered one. Everyone else is unknown.
 set -euo pipefail
 cd "$(dirname "$0")"
+# Telegram chat ids live in terraform.tfvars (gitignored), not here: tg ravi -> "|<chat id>" or "".
+tg() { terraform output -json telegram_chat_ids 2>/dev/null | .venv/bin/python -c "import sys, json; v = json.load(sys.stdin).get('$1', ''); print('|' + v if v else '')"; }
 .venv/bin/python seed.py --subject sunita --name Sunita \
   --address "B-304, Shanti Sadan, Dadar West, Mumbai" --phone "+91 98200 00000" \
   --record "Blood group B+ · Diabetic, on metformin · Allergic to penicillin | Daughter: Priya, 98200 00001" \
   --contact "vaishali|Vaishali|neighbour, 2nd floor|aryangorde6+vaishali@gmail.com|1|40|yes" \
   --contact "anil|Anil|neighbour, building watchman's flat|aryangorde8+anil@gmail.com|1|60|yes" \
-  --contact "ravi|Ravi|son|aryangorde8+ravi@gmail.com|1|4200|no" \
+  --contact "ravi|Ravi|son|aryangorde8+ravi@gmail.com|1|4200|no$(tg ravi)" \
   --contact "meena|Meena|neighbour, same floor|aryangorde6+meena@gmail.com|2|8|no" \
   --contact "sunil|Sunil|society secretary|aryangorde6+sunil@gmail.com|2|120|yes" \
   --contact "prakash|Prakash|nephew|aryangorde8+prakash@gmail.com|2|2600|no" \

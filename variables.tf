@@ -41,3 +41,16 @@ variable "sender_domain" {
   type    = string
   default = "aryangorde.com"
 }
+
+variable "telegram_bot_token" {
+  description = "Her Telegram bot's token, from @BotFather. Set in terraform.tfvars (gitignored); empty means no Telegram."
+  type        = string
+  default     = ""
+  sensitive   = true
+}
+
+variable "telegram_chat_ids" {
+  description = "contact_id => Telegram chat id, for the people on her list who have started the bot. seed.sh reads it."
+  type        = map(string)
+  default     = {}
+}

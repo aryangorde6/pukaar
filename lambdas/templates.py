@@ -1,4 +1,5 @@
-"""Every email the system sends. One render(kind, ctx) -> (subject, text, html).
+"""Every message the system sends. One render(kind, ctx) -> (subject, text, html) for
+email; render_telegram(kind, ctx) -> (text, button) for Telegram.
 
 Kinds: first_alert, widened, someone_going, false_alarm, no_one_reached.
 Words a neighbour would not use never appear here: no "incident", "tier",
@@ -133,6 +134,46 @@ HTML = {
 {_button(c)}
 """,
 }
+
+
+# The same five messages for Telegram: shorter, the link is a button, HTML parse mode
+# (so values are escaped below). "I can go now" stays a button here too - GET never writes.
+TELEGRAM = {
+    "first_alert": Template("""🆘 <b>$subject_name needs help</b>
+She pressed her help button at $pressed_at, just now.
+
+<b>$address_line1</b>
+$address_line2
+
+You are one of $contacted_count people contacted. No one has gone yet.
+If you can't go, that's alright — others were contacted too. If you think this is serious, call 112."""),
+    "widened": Template("""<b>Still no one has gone</b>
+$subject_name pressed her help button at $pressed_at. That was $minutes_ago minutes ago.
+
+<b>$address_line1</b>
+$address_line2
+
+You are one of $contacted_count people now contacted. If you can't go, please call 112 for her."""),
+    "someone_going": Template("""✓ <b>$claimer_name is going</b>
+$claimer_name said they're going at $claimed_at. $subject_name has been told they're coming.
+Nothing more is needed from you."""),
+    "false_alarm": Template("""<b>False alarm — $subject_name is OK</b>
+She cancelled the alert at $cancelled_at. Nothing is needed. Sorry for the interruption."""),
+    "no_one_reached": Template("""🆘 <b>URGENT — no one has gone</b>
+$subject_name pressed her help button at $pressed_at. It has been $minutes_ago minutes.
+
+<b>$address_line1</b>
+$address_line2
+
+Please call 112 for her now, or go if you can."""),
+}
+TELEGRAM_BUTTON = {"first_alert", "widened", "no_one_reached"}
+
+
+def render_telegram(kind, ctx):
+    """Returns (text, button) for one kind; button is ("I CAN GO NOW", claim_url) or None."""
+    text = TELEGRAM[kind].substitute({k: _esc(v) for k, v in ctx.items()})
+    return text, (("I CAN GO NOW", ctx["claim_url"]) if kind in TELEGRAM_BUTTON else None)
 
 
 def render(kind, ctx):
