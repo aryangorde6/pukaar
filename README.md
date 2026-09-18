@@ -39,8 +39,14 @@ Pukaar replaces the sequence with a fan-out. One press pages the three people mo
   <img src="docs/04-already-on-the-way.png" width="19%" alt="The loser of the race: Ravi is already on the way">
   <img src="docs/05-cancelled.png" width="19%" alt="After she cancels: Sunita cancelled this alert">
 </p>
+<p align="center">
+  <img src="docs/06-her-button-marathi.png" width="19%" alt="Her screen in Marathi: मला मदत हवी आहे, and who will be told">
+  <img src="docs/07-cant-come.png" width="19%" alt="Her screen after the one who claimed stepped back: Ravi can't come after all, and who has been told now">
+  <img src="docs/09-checkin.png" width="19%" alt="The weekly check-in a contact opens: NOT AN EMERGENCY, Sunita is fine, I'd be reachable now">
+  <img src="docs/08-timeline.png" width="38%" alt="The timeline of one alert: the press, three told at once, Ravi is going, notes opened, Ravi can't go after all, the next circle paged, cancelled, everyone told">
+</p>
 
-*Her button · the alert · you're going (with the notes) · already on the way · cancelled. Every text colour on these screens is at least 7:1 against its background, the AAA line; the button is 240 px tall, every other target at least 48 px.*
+*Top: her button · the alert (with where her phone is) · you're going (the notes, and "I can't go after all") · already on the way · cancelled. Bottom: her button in Marathi · her screen after Ravi stepped back · the weekly check-in · one alert's timeline, every line a row. All from real alerts on the live stack, 18 Sep. Every text colour on these screens is at least 7:1 against its background, the AAA line; the button is 240 px tall, every other target at least 48 px.*
 
 ### Correctness properties, stated
 
