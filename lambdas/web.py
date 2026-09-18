@@ -60,6 +60,8 @@ def handler(event, context):
     if path.startswith("/claim/") and method in ("GET", "POST"):
         token = path[len("/claim/"):]
         return claim_page(token) if method == "GET" else claim(token)
+    if method == "POST" and path.startswith("/release/"):
+        return release(path[len("/release/"):])
     if path.startswith("/checkin/") and method in ("GET", "POST"):
         return checkin(path[len("/checkin/"):], answer=(method == "POST"))
     if method == "POST" and path == "/location":
@@ -166,6 +168,10 @@ def status(incident_id):
         out["record_opened_at"] = fmt_time(item["record_opened_at"]["N"])
     if "cancelled_at" in item:
         out["cancelled_at"] = fmt_time(item["cancelled_at"]["N"])
+    if "releases" in item:  # the one who was coming stepped back; her page says so, and who is told now
+        out["stepped_back"] = item["releases"]["L"][-1]["M"]["name"]["S"]
+        if out["status"] in ("OPEN", "FALLBACK"):
+            out["told"] = told_names(item)
     return jsonr(200, out)
 
 
@@ -259,7 +265,7 @@ def claim_page(token):
     if found is None:
         return html(404, BAD_LINK)
     note, incident = found
-    return html(200, render_claim_state(note, incident))
+    return html(200, render_claim_state(note, incident, token=token))
 
 
 def claim(token):
@@ -296,7 +302,53 @@ def claim(token):
     # Either way, show what is true now: the row after the write, not what we hoped.
     incident = ddb.get_item(TableName=INCIDENTS, Key={"incident_id": incident["incident_id"]},
                             ConsistentRead=True)["Item"]
-    return html(200, render_claim_state(note, incident, on_claim=won))
+    return html(200, render_claim_state(note, incident, on_claim=won, token=token))
+
+
+def release(token):
+    """The one who said they were going can't after all. Only their own link, only while the
+    claim is recent: the alert reopens with the step-back on its row, the machine picks it up
+    at the next circle, and everyone else contacted is told with a fresh link."""
+    found = resolve(token)
+    if found is None:
+        return html(404, BAD_LINK)
+    note, incident = found
+    incident_id = incident["incident_id"]["S"]
+    now = int(time.time())
+    bc = json.loads(incident.get("broadcast", {}).get("S", "{}"))
+    entry = {"contact_id": note["contact_id"], "name": incident.get("claimed_by_name", {"S": ""}),
+             "claimed_at": incident.get("claimed_at", {"N": "0"}), "at": {"N": str(now)}}
+    if bc.get("kind") == "someone_going" and bc.get("at"):
+        entry["told_at"] = {"N": str(int(bc["at"]))}
+    try:
+        ddb.update_item(
+            TableName=INCIDENTS, Key={"incident_id": {"S": incident_id}},
+            UpdateExpression="SET #s = :open, releases = list_append(if_not_exists(releases, :none), :r) "
+                             "REMOVE claimed_by, claimed_by_name, claimed_at, task_token",
+            ConditionExpression="#s = :claimed AND claimed_by = :me AND claimed_at > :recent",
+            ExpressionAttributeNames={"#s": "status"},
+            ExpressionAttributeValues={":open": {"S": "OPEN"}, ":claimed": {"S": "CLAIMED"}, ":me": note["contact_id"],
+                                       ":recent": {"N": str(now - RECENT_CLAIM_S)}, ":none": {"L": []},
+                                       ":r": {"L": [{"M": entry}]}},
+        )
+    except ClientError as e:
+        if e.response["Error"]["Code"] != "ConditionalCheckFailedException":
+            raise
+        # Not theirs to give back, or no longer current: show what is true now.
+        incident = ddb.get_item(TableName=INCIDENTS, Key={"incident_id": {"S": incident_id}}, ConsistentRead=True)["Item"]
+        return html(200, render_claim_state(note, incident, token=token))
+    # Who to tell is fixed now, before the machine pages anyone new. The machine first - a
+    # stuck alert is worse than a late message - then the people.
+    earlier = [r["M"]["contact_id"]["S"] for r in incident.get("releases", {}).get("L", [])]
+    told = sorted(reached_ids(incident_id) - {*earlier, note["contact_id"]["S"]})
+    started = sfn.start_execution(stateMachineArn=STATE_MACHINE_ARN, name=f"{incident_id}-r{len(earlier) + 1}",
+                                  input=json.dumps({"incident_id": incident_id, "resumed": True}))
+    lam.invoke(FunctionName=BROADCAST_FN, InvocationType="RequestResponse",
+               Payload=json.dumps({"kind": "stepped_back", "incident_id": incident_id, "contacts": told}).encode())
+    print(json.dumps({"component": "web", "event": "released", "incident_id": incident_id,
+                      "contact_id": note["contact_id"]["S"], "execution_arn": started["executionArn"]}))
+    subject = ddb.get_item(TableName=SUBJECTS, Key={"subject_id": incident["subject_id"]})["Item"]
+    return html(200, CLAIM_RELEASED.substitute(name=escape(subject["name"]["S"]), incident_id=incident_id))
 
 
 def count_answer(note, now):
@@ -393,11 +445,16 @@ def incident_page(incident_id):
             claimer = incident.get("claimed_by", {}).get("S")
             events.append((n(r, "responded_at"), 3, f"<strong>{escape(who(cid))}</strong> answered"
                            + ("" if cid == claimer else f" — {escape(who(claimer))} was already going" if claimer else "")))
+    releases = [r["M"] for r in incident.get("releases", {}).get("L", [])]
+    first_send = {tier: min(t for t, _, _ in sends) for tier, sends in tiers.items()}
     for tier, sends in sorted(tiers.items(), key=lambda kv: int(kv[0])):
-        at = min(t for t, _, _ in sends)
+        at = first_send[tier]
         told = join_names([who(c) for _, c, _ in sorted(sends, key=lambda x: x[1])])
         on_tg = [who(c) for _, c, tg in sends if tg]
-        lead = "" if tier == "1" else "no one had answered — "
+        # Why this circle was paged: the wait ran out, or the one who was going stepped back.
+        earlier = max((t for k, t in first_send.items() if int(k) < int(tier)), default=0)
+        stepped = any(earlier < n(r, "at") <= at for r in releases)
+        lead = "" if tier == "1" else "after the step-back — " if stepped else "no one had answered — "
         line = f"{lead}<strong>{escape(told)}</strong> {'was' if len(sends) == 1 else 'were'} told at once"
         if on_tg:
             line += f" <span class=\"muted\">({escape(join_names(on_tg))} on Telegram too)</span>"
@@ -405,13 +462,18 @@ def incident_page(incident_id):
     if "location" in incident:
         loc = incident["location"]["M"]
         events.append((n(loc, "at"), 2, f"her phone reported where she is (within {int(loc['accuracy_m']['N'])} m)"))
+    for r in releases:  # said they were going, then stepped back
+        events.append((n(r, "claimed_at"), 4, f"&#10003; <strong>{escape(r['name']['S'])}</strong> is going"))
+        if "told_at" in r:
+            events.append((n(r, "told_at"), 7, f"everyone else was told <strong>{escape(r['name']['S'])}</strong> is going"))
+        events.append((n(r, "at"), 7, f"<strong>{escape(r['name']['S'])}</strong> can’t go after all — everyone contacted was told, and the next circle paged"))
     if "claimed_at" in incident:
         events.append((n(incident, "claimed_at"), 4, f"&#10003; <strong>{escape(incident['claimed_by_name']['S'])}</strong> is going"))
     if "record_opened_at" in incident:
         events.append((n(incident, "record_opened_at"), 5,
                        f"<strong>{escape(who(incident.get('record_opened_by', {}).get('S', '')))}</strong> opened her medical notes"))
     bc = json.loads(incident.get("broadcast", {}).get("S", "{}"))
-    if bc.get("at"):
+    if bc.get("at") and bc.get("kind") != "stepped_back":  # the step-back line above covers that one
         told = join_names([who(c) for c in bc.get("told", [])])
         text = {"someone_going": f"everyone else was told <strong>{escape(incident.get('claimed_by_name', {}).get('S', ''))}</strong> is going",
                 "false_alarm": "everyone was told it was a false alarm",
@@ -440,7 +502,7 @@ def fmt_clock(epoch):
     return datetime.fromtimestamp(int(epoch), IST).strftime("%-I:%M:%S %p").lower()
 
 
-def render_claim_state(note, incident, on_claim=False):
+def render_claim_state(note, incident, on_claim=False, token=""):
     subject = ddb.get_item(TableName=SUBJECTS, Key={"subject_id": incident["subject_id"]})["Item"]
     status = incident["status"]["S"]
     name = escape(subject["name"]["S"])
@@ -467,6 +529,8 @@ def render_claim_state(note, incident, on_claim=False):
         ctx["claimed_at"] = fmt_time(incident["claimed_at"]["N"])
         if incident["claimed_by"]["S"] == note["contact_id"]["S"]:
             ctx["record"] = open_record(subject, incident["incident_id"]["S"], note["contact_id"]["S"], on_claim)
+            recent = time.time() - int(incident["claimed_at"]["N"]) < RECENT_CLAIM_S
+            ctx["release"] = RELEASE_FORM.substitute(token=escape(token)) if recent else ""
             return CLAIM_YOURS.substitute(ctx)
         ctx["claimer"] = escape(incident["claimed_by_name"]["S"])
         return CLAIM_TAKEN.substitute(ctx)
@@ -523,6 +587,24 @@ def first_circle_names():
     """The people a press right now would page first: the same ranking SelectTier uses,
     with nobody reached yet."""
     return [c["name"] for c in rank(SUBJECT_ID, time.time())[:TIER_SIZE]]
+
+
+def reached_ids(incident_id):
+    """Everyone with a delivered page on this alert."""
+    return {r["contact_id"]["S"]
+            for r in ddb.query(TableName=NOTIFICATIONS, KeyConditionExpression="incident_id = :i",
+                               FilterExpression="delivered = :t",
+                               ExpressionAttributeValues={":i": {"S": incident_id}, ":t": {"BOOL": True}})["Items"]}
+
+
+def told_names(incident):
+    """Everyone reached on this alert, by name, minus anyone who stepped back."""
+    gone = {r["M"]["contact_id"]["S"] for r in incident.get("releases", {}).get("L", [])}
+    paged = reached_ids(incident["incident_id"]["S"]) - gone
+    names = {r["contact_id"]["S"]: r["name"]["S"]
+             for r in ddb.query(TableName=CONTACTS, KeyConditionExpression="subject_id = :s",
+                                ExpressionAttributeValues={":s": incident["subject_id"]})["Items"]}
+    return [n for c, n in names.items() if c in paged]
 
 
 def join_names(names):
@@ -605,7 +687,7 @@ STRINGS = {
         "has_notes": "{name} has your medical notes.", "cancelled_h1": "Cancelled",
         "cancelled_p": "Everyone has been told it was a false alarm.",
         "failed_h1": "Couldn’t send", "retry": "Try again", "call_112": "Or call 112 now.",
-        "foot": "Not working? Call", "and": " and ", "location": "Let helpers see where you are", "name": "English",
+        "foot": "Not working? Call", "and": " and ", "location": "Let helpers see where you are", "stepped_back": "{name} can’t come after all.", "name": "English",
     },
     "mr": {
         "title": "मला मदत हवी आहे", "idle_h1": "मला मदत हवी आहे", "press": "मला मदत हवी आहे",
@@ -618,7 +700,7 @@ STRINGS = {
         "has_notes": "{name} यांच्याकडे तुमच्या वैद्यकीय नोंदी आहेत.", "cancelled_h1": "रद्द केले",
         "cancelled_p": "सर्वांना कळवले आहे की सगळे ठीक आहे.",
         "failed_h1": "पाठवता आले नाही", "retry": "पुन्हा प्रयत्न करा", "call_112": "किंवा आत्ताच 112 ला फोन करा.",
-        "foot": "चालत नाही? फोन करा", "and": " आणि ", "location": "मदत करणाऱ्यांना तुम्ही कुठे आहात ते दिसू द्या", "name": "मराठी",
+        "foot": "चालत नाही? फोन करा", "and": " आणि ", "location": "मदत करणाऱ्यांना तुम्ही कुठे आहात ते दिसू द्या", "stepped_back": "{name} आता येऊ शकणार नाहीत.", "name": "मराठी",
     },
     "hi": {
         "title": "मुझे मदद चाहिए", "idle_h1": "मुझे मदद चाहिए", "press": "मुझे मदद चाहिए",
@@ -631,33 +713,33 @@ STRINGS = {
         "has_notes": "{name} के पास आपकी मेडिकल जानकारी है.", "cancelled_h1": "रद्द किया गया",
         "cancelled_p": "सबको बता दिया गया है कि सब ठीक है.",
         "failed_h1": "भेजा नहीं जा सका", "retry": "फिर से कोशिश करें", "call_112": "या अभी 112 पर फ़ोन करें.",
-        "foot": "काम नहीं कर रहा? फ़ोन करें", "and": " और ", "location": "मदद करने वालों को दिखने दें कि आप कहाँ हैं", "name": "हिन्दी",
+        "foot": "काम नहीं कर रहा? फ़ोन करें", "and": " और ", "location": "मदद करने वालों को दिखने दें कि आप कहाँ हैं", "stepped_back": "{name} अब नहीं आ पाएँगे.", "name": "हिन्दी",
     },
     # The eight below are drafts checked by machine translation only, not yet read by a
     # speaker; the README says so, and English is one tap away on every screen.
     "gu": {
-        "title": "મને મદદ જોઈએ છે", "idle_h1": "મને મદદ જોઈએ છે", "press": "મને મદદ જોઈએ છે", "press_busy": "મદદ બોલાવી રહ્યા છીએ…", "press_once": "એક વાર દબાવો.", "told": "{names} ને તરત જણાવવામાં આવશે.", "told_none": "હજી કોઈને ઉમેરવામાં આવ્યું નથી, તેથી આ બટન કોઈ સુધી પહોંચી શકતું નથી.", "sent_h1": "મદદ બોલાવી છે", "sent_names": "{names} ને જણાવી દીધું છે.", "waiting": "તેમાંથી કોઈના જવાબની રાહ જોઈએ છીએ…", "cancel": "રદ કરો — હું ઠીક છું", "cancelling": "રદ કરી રહ્યા છીએ…", "coming_h1": "{name} આવી રહ્યા છે", "on_way": "રસ્તામાં છે.", "has_notes": "{name} પાસે તમારી તબીબી માહિતી છે.", "cancelled_h1": "રદ કર્યું", "cancelled_p": "બધાને જણાવી દીધું છે કે બધું ઠીક છે.", "failed_h1": "મોકલી શકાયું નહીં", "retry": "ફરી પ્રયત્ન કરો", "call_112": "અથવા હમણાં જ 112 પર ફોન કરો.", "foot": "કામ નથી કરતું? ફોન કરો", "and": " અને ", "location": "મદદ કરનારાઓને તમે ક્યાં છો તે જોવા દો", "name": "ગુજરાતી",
+        "title": "મને મદદ જોઈએ છે", "idle_h1": "મને મદદ જોઈએ છે", "press": "મને મદદ જોઈએ છે", "press_busy": "મદદ બોલાવી રહ્યા છીએ…", "press_once": "એક વાર દબાવો.", "told": "{names} ને તરત જણાવવામાં આવશે.", "told_none": "હજી કોઈને ઉમેરવામાં આવ્યું નથી, તેથી આ બટન કોઈ સુધી પહોંચી શકતું નથી.", "sent_h1": "મદદ બોલાવી છે", "sent_names": "{names} ને જણાવી દીધું છે.", "waiting": "તેમાંથી કોઈના જવાબની રાહ જોઈએ છીએ…", "cancel": "રદ કરો — હું ઠીક છું", "cancelling": "રદ કરી રહ્યા છીએ…", "coming_h1": "{name} આવી રહ્યા છે", "on_way": "રસ્તામાં છે.", "has_notes": "{name} પાસે તમારી તબીબી માહિતી છે.", "cancelled_h1": "રદ કર્યું", "cancelled_p": "બધાને જણાવી દીધું છે કે બધું ઠીક છે.", "failed_h1": "મોકલી શકાયું નહીં", "retry": "ફરી પ્રયત્ન કરો", "call_112": "અથવા હમણાં જ 112 પર ફોન કરો.", "foot": "કામ નથી કરતું? ફોન કરો", "and": " અને ", "location": "મદદ કરનારાઓને તમે ક્યાં છો તે જોવા દો", "stepped_back": "{name} હવે આવી શકશે નહીં.", "name": "ગુજરાતી",
     },
     "ta": {
-        "title": "எனக்கு உதவி வேண்டும்", "idle_h1": "எனக்கு உதவி வேண்டும்", "press": "எனக்கு உதவி வேண்டும்", "press_busy": "உதவி அழைக்கப்படுகிறது…", "press_once": "ஒரு முறை அழுத்துங்கள்.", "told": "{names} ஆகியோருக்கு உடனே தெரிவிக்கப்படும்.", "told_none": "இன்னும் யாரும் சேர்க்கப்படவில்லை, எனவே இந்த பொத்தான் யாரையும் அடைய முடியாது.", "sent_h1": "உதவி அழைக்கப்பட்டது", "sent_names": "{names} ஆகியோருக்கு தெரிவிக்கப்பட்டது.", "waiting": "அவர்களில் ஒருவர் பதிலளிக்கக் காத்திருக்கிறோம்…", "cancel": "ரத்து செய் — நான் நலம்", "cancelling": "ரத்து செய்யப்படுகிறது…", "coming_h1": "{name} வருகிறார்", "on_way": "வழியில் இருக்கிறார்.", "has_notes": "{name} இடம் உங்கள் மருத்துவக் குறிப்புகள் உள்ளன.", "cancelled_h1": "ரத்து செய்யப்பட்டது", "cancelled_p": "எல்லாம் நலம் என்று அனைவருக்கும் தெரிவிக்கப்பட்டது.", "failed_h1": "அனுப்ப முடியவில்லை", "retry": "மீண்டும் முயற்சிக்கவும்", "call_112": "அல்லது இப்போதே 112-ஐ அழைக்கவும்.", "foot": "வேலை செய்யவில்லையா? அழைக்கவும்", "and": " மற்றும் ", "location": "உதவுபவர்கள் நீங்கள் எங்கே இருக்கிறீர்கள் என்று பார்க்கட்டும்", "name": "தமிழ்",
+        "title": "எனக்கு உதவி வேண்டும்", "idle_h1": "எனக்கு உதவி வேண்டும்", "press": "எனக்கு உதவி வேண்டும்", "press_busy": "உதவி அழைக்கப்படுகிறது…", "press_once": "ஒரு முறை அழுத்துங்கள்.", "told": "{names} ஆகியோருக்கு உடனே தெரிவிக்கப்படும்.", "told_none": "இன்னும் யாரும் சேர்க்கப்படவில்லை, எனவே இந்த பொத்தான் யாரையும் அடைய முடியாது.", "sent_h1": "உதவி அழைக்கப்பட்டது", "sent_names": "{names} ஆகியோருக்கு தெரிவிக்கப்பட்டது.", "waiting": "அவர்களில் ஒருவர் பதிலளிக்கக் காத்திருக்கிறோம்…", "cancel": "ரத்து செய் — நான் நலம்", "cancelling": "ரத்து செய்யப்படுகிறது…", "coming_h1": "{name} வருகிறார்", "on_way": "வழியில் இருக்கிறார்.", "has_notes": "{name} இடம் உங்கள் மருத்துவக் குறிப்புகள் உள்ளன.", "cancelled_h1": "ரத்து செய்யப்பட்டது", "cancelled_p": "எல்லாம் நலம் என்று அனைவருக்கும் தெரிவிக்கப்பட்டது.", "failed_h1": "அனுப்ப முடியவில்லை", "retry": "மீண்டும் முயற்சிக்கவும்", "call_112": "அல்லது இப்போதே 112-ஐ அழைக்கவும்.", "foot": "வேலை செய்யவில்லையா? அழைக்கவும்", "and": " மற்றும் ", "location": "உதவுபவர்கள் நீங்கள் எங்கே இருக்கிறீர்கள் என்று பார்க்கட்டும்", "stepped_back": "{name} இப்போது வர முடியாது.", "name": "தமிழ்",
     },
     "te": {
-        "title": "నాకు సహాయం కావాలి", "idle_h1": "నాకు సహాయం కావాలి", "press": "నాకు సహాయం కావాలి", "press_busy": "సహాయం పిలుస్తున్నాం…", "press_once": "ఒకసారి నొక్కండి.", "told": "{names} కి వెంటనే తెలియజేయబడుతుంది.", "told_none": "ఇంకా ఎవరినీ చేర్చలేదు, కాబట్టి ఈ బటన్ ఎవరికీ చేరదు.", "sent_h1": "సహాయం పిలిచాం", "sent_names": "{names} కి తెలియజేశాం.", "waiting": "వారిలో ఎవరైనా జవాబు ఇచ్చే వరకు వేచి ఉన్నాం…", "cancel": "రద్దు చేయి — నేను బాగానే ఉన్నాను", "cancelling": "రద్దు చేస్తున్నాం…", "coming_h1": "{name} వస్తున్నారు", "on_way": "దారిలో ఉన్నారు.", "has_notes": "{name} దగ్గర మీ వైద్య వివరాలు ఉన్నాయి.", "cancelled_h1": "రద్దు చేయబడింది", "cancelled_p": "అంతా బాగానే ఉందని అందరికీ తెలియజేశాం.", "failed_h1": "పంపలేకపోయాం", "retry": "మళ్ళీ ప్రయత్నించండి", "call_112": "లేదా ఇప్పుడే 112 కి ఫోన్ చేయండి.", "foot": "పని చేయడం లేదా? ఫోన్ చేయండి", "and": " మరియు ", "location": "సహాయం చేసేవారికి మీరు ఎక్కడ ఉన్నారో చూడనివ్వండి", "name": "తెలుగు",
+        "title": "నాకు సహాయం కావాలి", "idle_h1": "నాకు సహాయం కావాలి", "press": "నాకు సహాయం కావాలి", "press_busy": "సహాయం పిలుస్తున్నాం…", "press_once": "ఒకసారి నొక్కండి.", "told": "{names} కి వెంటనే తెలియజేయబడుతుంది.", "told_none": "ఇంకా ఎవరినీ చేర్చలేదు, కాబట్టి ఈ బటన్ ఎవరికీ చేరదు.", "sent_h1": "సహాయం పిలిచాం", "sent_names": "{names} కి తెలియజేశాం.", "waiting": "వారిలో ఎవరైనా జవాబు ఇచ్చే వరకు వేచి ఉన్నాం…", "cancel": "రద్దు చేయి — నేను బాగానే ఉన్నాను", "cancelling": "రద్దు చేస్తున్నాం…", "coming_h1": "{name} వస్తున్నారు", "on_way": "దారిలో ఉన్నారు.", "has_notes": "{name} దగ్గర మీ వైద్య వివరాలు ఉన్నాయి.", "cancelled_h1": "రద్దు చేయబడింది", "cancelled_p": "అంతా బాగానే ఉందని అందరికీ తెలియజేశాం.", "failed_h1": "పంపలేకపోయాం", "retry": "మళ్ళీ ప్రయత్నించండి", "call_112": "లేదా ఇప్పుడే 112 కి ఫోన్ చేయండి.", "foot": "పని చేయడం లేదా? ఫోన్ చేయండి", "and": " మరియు ", "location": "సహాయం చేసేవారికి మీరు ఎక్కడ ఉన్నారో చూడనివ్వండి", "stepped_back": "{name} ఇప్పుడు రాలేరు.", "name": "తెలుగు",
     },
     "kn": {
-        "title": "ನನಗೆ ಸಹಾಯ ಬೇಕು", "idle_h1": "ನನಗೆ ಸಹಾಯ ಬೇಕು", "press": "ನನಗೆ ಸಹಾಯ ಬೇಕು", "press_busy": "ಸಹಾಯ ಕರೆಯಲಾಗುತ್ತಿದೆ…", "press_once": "ಒಮ್ಮೆ ಒತ್ತಿ.", "told": "{names} ಅವರಿಗೆ ತಕ್ಷಣ ತಿಳಿಸಲಾಗುವುದು.", "told_none": "ಇನ್ನೂ ಯಾರನ್ನೂ ಸೇರಿಸಿಲ್ಲ, ಆದ್ದರಿಂದ ಈ ಬಟನ್ ಯಾರನ್ನೂ ತಲುಪಲಾರದು.", "sent_h1": "ಸಹಾಯ ಕರೆಯಲಾಗಿದೆ", "sent_names": "{names} ಅವರಿಗೆ ತಿಳಿಸಲಾಗಿದೆ.", "waiting": "ಅವರಲ್ಲಿ ಯಾರಾದರೂ ಉತ್ತರಿಸುವವರೆಗೆ ಕಾಯುತ್ತಿದ್ದೇವೆ…", "cancel": "ರದ್ದು ಮಾಡಿ — ನಾನು ಚೆನ್ನಾಗಿದ್ದೇನೆ", "cancelling": "ರದ್ದು ಮಾಡಲಾಗುತ್ತಿದೆ…", "coming_h1": "{name} ಬರುತ್ತಿದ್ದಾರೆ", "on_way": "ದಾರಿಯಲ್ಲಿದ್ದಾರೆ.", "has_notes": "{name} ಅವರ ಬಳಿ ನಿಮ್ಮ ವೈದ್ಯಕೀಯ ಮಾಹಿತಿ ಇದೆ.", "cancelled_h1": "ರದ್ದು ಮಾಡಲಾಗಿದೆ", "cancelled_p": "ಎಲ್ಲವೂ ಸರಿಯಿದೆ ಎಂದು ಎಲ್ಲರಿಗೂ ತಿಳಿಸಲಾಗಿದೆ.", "failed_h1": "ಕಳುಹಿಸಲು ಆಗಲಿಲ್ಲ", "retry": "ಮತ್ತೆ ಪ್ರಯತ್ನಿಸಿ", "call_112": "ಅಥವಾ ಈಗಲೇ 112 ಗೆ ಕರೆ ಮಾಡಿ.", "foot": "ಕೆಲಸ ಮಾಡುತ್ತಿಲ್ಲವೇ? ಕರೆ ಮಾಡಿ", "and": " ಮತ್ತು ", "location": "ಸಹಾಯ ಮಾಡುವವರಿಗೆ ನೀವು ಎಲ್ಲಿದ್ದೀರಿ ಎಂದು ನೋಡಲು ಬಿಡಿ", "name": "ಕನ್ನಡ",
+        "title": "ನನಗೆ ಸಹಾಯ ಬೇಕು", "idle_h1": "ನನಗೆ ಸಹಾಯ ಬೇಕು", "press": "ನನಗೆ ಸಹಾಯ ಬೇಕು", "press_busy": "ಸಹಾಯ ಕರೆಯಲಾಗುತ್ತಿದೆ…", "press_once": "ಒಮ್ಮೆ ಒತ್ತಿ.", "told": "{names} ಅವರಿಗೆ ತಕ್ಷಣ ತಿಳಿಸಲಾಗುವುದು.", "told_none": "ಇನ್ನೂ ಯಾರನ್ನೂ ಸೇರಿಸಿಲ್ಲ, ಆದ್ದರಿಂದ ಈ ಬಟನ್ ಯಾರನ್ನೂ ತಲುಪಲಾರದು.", "sent_h1": "ಸಹಾಯ ಕರೆಯಲಾಗಿದೆ", "sent_names": "{names} ಅವರಿಗೆ ತಿಳಿಸಲಾಗಿದೆ.", "waiting": "ಅವರಲ್ಲಿ ಯಾರಾದರೂ ಉತ್ತರಿಸುವವರೆಗೆ ಕಾಯುತ್ತಿದ್ದೇವೆ…", "cancel": "ರದ್ದು ಮಾಡಿ — ನಾನು ಚೆನ್ನಾಗಿದ್ದೇನೆ", "cancelling": "ರದ್ದು ಮಾಡಲಾಗುತ್ತಿದೆ…", "coming_h1": "{name} ಬರುತ್ತಿದ್ದಾರೆ", "on_way": "ದಾರಿಯಲ್ಲಿದ್ದಾರೆ.", "has_notes": "{name} ಅವರ ಬಳಿ ನಿಮ್ಮ ವೈದ್ಯಕೀಯ ಮಾಹಿತಿ ಇದೆ.", "cancelled_h1": "ರದ್ದು ಮಾಡಲಾಗಿದೆ", "cancelled_p": "ಎಲ್ಲವೂ ಸರಿಯಿದೆ ಎಂದು ಎಲ್ಲರಿಗೂ ತಿಳಿಸಲಾಗಿದೆ.", "failed_h1": "ಕಳುಹಿಸಲು ಆಗಲಿಲ್ಲ", "retry": "ಮತ್ತೆ ಪ್ರಯತ್ನಿಸಿ", "call_112": "ಅಥವಾ ಈಗಲೇ 112 ಗೆ ಕರೆ ಮಾಡಿ.", "foot": "ಕೆಲಸ ಮಾಡುತ್ತಿಲ್ಲವೇ? ಕರೆ ಮಾಡಿ", "and": " ಮತ್ತು ", "location": "ಸಹಾಯ ಮಾಡುವವರಿಗೆ ನೀವು ಎಲ್ಲಿದ್ದೀರಿ ಎಂದು ನೋಡಲು ಬಿಡಿ", "stepped_back": "{name} ಈಗ ಬರಲು ಸಾಧ್ಯವಿಲ್ಲ.", "name": "ಕನ್ನಡ",
     },
     "bn": {
-        "title": "আমার সাহায্য দরকার", "idle_h1": "আমার সাহায্য দরকার", "press": "আমার সাহায্য দরকার", "press_busy": "সাহায্য ডাকা হচ্ছে…", "press_once": "একবার চাপুন।", "told": "{names}-কে এখনই জানানো হবে।", "told_none": "এখনও কাউকে যোগ করা হয়নি, তাই এই বোতাম কারও কাছে পৌঁছাতে পারবে না।", "sent_h1": "সাহায্য ডাকা হয়েছে", "sent_names": "{names}-কে জানানো হয়েছে।", "waiting": "তাঁদের কারও উত্তরের অপেক্ষায় আছি…", "cancel": "বাতিল করুন — আমি ঠিক আছি", "cancelling": "বাতিল করা হচ্ছে…", "coming_h1": "{name} আসছেন", "on_way": "পথে আছেন।", "has_notes": "{name}-এর কাছে আপনার চিকিৎসার তথ্য আছে।", "cancelled_h1": "বাতিল হয়েছে", "cancelled_p": "সবাইকে জানানো হয়েছে যে সব ঠিক আছে।", "failed_h1": "পাঠানো যায়নি", "retry": "আবার চেষ্টা করুন", "call_112": "অথবা এখনই 112 নম্বরে ফোন করুন।", "foot": "কাজ করছে না? ফোন করুন", "and": " এবং ", "location": "সাহায্যকারীরা দেখুক আপনি কোথায় আছেন", "name": "বাংলা",
+        "title": "আমার সাহায্য দরকার", "idle_h1": "আমার সাহায্য দরকার", "press": "আমার সাহায্য দরকার", "press_busy": "সাহায্য ডাকা হচ্ছে…", "press_once": "একবার চাপুন।", "told": "{names}-কে এখনই জানানো হবে।", "told_none": "এখনও কাউকে যোগ করা হয়নি, তাই এই বোতাম কারও কাছে পৌঁছাতে পারবে না।", "sent_h1": "সাহায্য ডাকা হয়েছে", "sent_names": "{names}-কে জানানো হয়েছে।", "waiting": "তাঁদের কারও উত্তরের অপেক্ষায় আছি…", "cancel": "বাতিল করুন — আমি ঠিক আছি", "cancelling": "বাতিল করা হচ্ছে…", "coming_h1": "{name} আসছেন", "on_way": "পথে আছেন।", "has_notes": "{name}-এর কাছে আপনার চিকিৎসার তথ্য আছে।", "cancelled_h1": "বাতিল হয়েছে", "cancelled_p": "সবাইকে জানানো হয়েছে যে সব ঠিক আছে।", "failed_h1": "পাঠানো যায়নি", "retry": "আবার চেষ্টা করুন", "call_112": "অথবা এখনই 112 নম্বরে ফোন করুন।", "foot": "কাজ করছে না? ফোন করুন", "and": " এবং ", "location": "সাহায্যকারীরা দেখুক আপনি কোথায় আছেন", "stepped_back": "{name} এখন আসতে পারবেন না।", "name": "বাংলা",
     },
     "ml": {
-        "title": "എനിക്ക് സഹായം വേണം", "idle_h1": "എനിക്ക് സഹായം വേണം", "press": "എനിക്ക് സഹായം വേണം", "press_busy": "സഹായം വിളിക്കുന്നു…", "press_once": "ഒരു തവണ അമർത്തുക.", "told": "{names} എന്നിവരെ ഉടൻ അറിയിക്കും.", "told_none": "ഇതുവരെ ആരെയും ചേർത്തിട്ടില്ല, അതിനാൽ ഈ ബട്ടൺ ആരിലും എത്തില്ല.", "sent_h1": "സഹായം വിളിച്ചു", "sent_names": "{names} എന്നിവരെ അറിയിച്ചു.", "waiting": "അവരിൽ ആരെങ്കിലും മറുപടി നൽകാൻ കാത്തിരിക്കുന്നു…", "cancel": "റദ്ദാക്കുക — എനിക്ക് കുഴപ്പമില്ല", "cancelling": "റദ്ദാക്കുന്നു…", "coming_h1": "{name} വരുന്നു", "on_way": "വഴിയിലാണ്.", "has_notes": "{name}-ന്റെ കൈയിൽ നിങ്ങളുടെ മെഡിക്കൽ വിവരങ്ങളുണ്ട്.", "cancelled_h1": "റദ്ദാക്കി", "cancelled_p": "എല്ലാം ശരിയാണെന്ന് എല്ലാവരെയും അറിയിച്ചു.", "failed_h1": "അയയ്ക്കാനായില്ല", "retry": "വീണ്ടും ശ്രമിക്കുക", "call_112": "അല്ലെങ്കിൽ ഇപ്പോൾ തന്നെ 112 വിളിക്കുക.", "foot": "പ്രവർത്തിക്കുന്നില്ലേ? വിളിക്കുക", "and": " കൂടാതെ ", "location": "സഹായിക്കുന്നവർക്ക് നിങ്ങൾ എവിടെയാണെന്ന് കാണാൻ അനുവദിക്കുക", "name": "മലയാളം",
+        "title": "എനിക്ക് സഹായം വേണം", "idle_h1": "എനിക്ക് സഹായം വേണം", "press": "എനിക്ക് സഹായം വേണം", "press_busy": "സഹായം വിളിക്കുന്നു…", "press_once": "ഒരു തവണ അമർത്തുക.", "told": "{names} എന്നിവരെ ഉടൻ അറിയിക്കും.", "told_none": "ഇതുവരെ ആരെയും ചേർത്തിട്ടില്ല, അതിനാൽ ഈ ബട്ടൺ ആരിലും എത്തില്ല.", "sent_h1": "സഹായം വിളിച്ചു", "sent_names": "{names} എന്നിവരെ അറിയിച്ചു.", "waiting": "അവരിൽ ആരെങ്കിലും മറുപടി നൽകാൻ കാത്തിരിക്കുന്നു…", "cancel": "റദ്ദാക്കുക — എനിക്ക് കുഴപ്പമില്ല", "cancelling": "റദ്ദാക്കുന്നു…", "coming_h1": "{name} വരുന്നു", "on_way": "വഴിയിലാണ്.", "has_notes": "{name}-ന്റെ കൈയിൽ നിങ്ങളുടെ മെഡിക്കൽ വിവരങ്ങളുണ്ട്.", "cancelled_h1": "റദ്ദാക്കി", "cancelled_p": "എല്ലാം ശരിയാണെന്ന് എല്ലാവരെയും അറിയിച്ചു.", "failed_h1": "അയയ്ക്കാനായില്ല", "retry": "വീണ്ടും ശ്രമിക്കുക", "call_112": "അല്ലെങ്കിൽ ഇപ്പോൾ തന്നെ 112 വിളിക്കുക.", "foot": "പ്രവർത്തിക്കുന്നില്ലേ? വിളിക്കുക", "and": " കൂടാതെ ", "location": "സഹായിക്കുന്നവർക്ക് നിങ്ങൾ എവിടെയാണെന്ന് കാണാൻ അനുവദിക്കുക", "stepped_back": "{name} ഇപ്പോൾ വരാൻ കഴിയില്ല.", "name": "മലയാളം",
     },
     "pa": {
-        "title": "ਮੈਨੂੰ ਮਦਦ ਚਾਹੀਦੀ ਹੈ", "idle_h1": "ਮੈਨੂੰ ਮਦਦ ਚਾਹੀਦੀ ਹੈ", "press": "ਮੈਨੂੰ ਮਦਦ ਚਾਹੀਦੀ ਹੈ", "press_busy": "ਮਦਦ ਬੁਲਾਈ ਜਾ ਰਹੀ ਹੈ…", "press_once": "ਇੱਕ ਵਾਰ ਦਬਾਓ।", "told": "{names} ਨੂੰ ਤੁਰੰਤ ਦੱਸ ਦਿੱਤਾ ਜਾਵੇਗਾ।", "told_none": "ਹਾਲੇ ਕਿਸੇ ਨੂੰ ਨਹੀਂ ਜੋੜਿਆ ਗਿਆ, ਇਸ ਲਈ ਇਹ ਬਟਨ ਕਿਸੇ ਤੱਕ ਨਹੀਂ ਪਹੁੰਚ ਸਕਦਾ।", "sent_h1": "ਮਦਦ ਬੁਲਾਈ ਗਈ ਹੈ", "sent_names": "{names} ਨੂੰ ਦੱਸ ਦਿੱਤਾ ਗਿਆ ਹੈ।", "waiting": "ਉਨ੍ਹਾਂ ਵਿੱਚੋਂ ਕਿਸੇ ਦੇ ਜਵਾਬ ਦੀ ਉਡੀਕ ਹੈ…", "cancel": "ਰੱਦ ਕਰੋ — ਮੈਂ ਠੀਕ ਹਾਂ", "cancelling": "ਰੱਦ ਕੀਤਾ ਜਾ ਰਿਹਾ ਹੈ…", "coming_h1": "{name} ਆ ਰਹੇ ਹਨ", "on_way": "ਰਾਹ ਵਿੱਚ ਹਨ।", "has_notes": "{name} ਕੋਲ ਤੁਹਾਡੀ ਮੈਡੀਕਲ ਜਾਣਕਾਰੀ ਹੈ।", "cancelled_h1": "ਰੱਦ ਕੀਤਾ ਗਿਆ", "cancelled_p": "ਸਭ ਨੂੰ ਦੱਸ ਦਿੱਤਾ ਗਿਆ ਹੈ ਕਿ ਸਭ ਠੀਕ ਹੈ।", "failed_h1": "ਭੇਜਿਆ ਨਹੀਂ ਜਾ ਸਕਿਆ", "retry": "ਫਿਰ ਕੋਸ਼ਿਸ਼ ਕਰੋ", "call_112": "ਜਾਂ ਹੁਣੇ 112 'ਤੇ ਫ਼ੋਨ ਕਰੋ।", "foot": "ਕੰਮ ਨਹੀਂ ਕਰ ਰਿਹਾ? ਫ਼ੋਨ ਕਰੋ", "and": " ਅਤੇ ", "location": "ਮਦਦ ਕਰਨ ਵਾਲਿਆਂ ਨੂੰ ਦੇਖਣ ਦਿਓ ਕਿ ਤੁਸੀਂ ਕਿੱਥੇ ਹੋ", "name": "ਪੰਜਾਬੀ",
+        "title": "ਮੈਨੂੰ ਮਦਦ ਚਾਹੀਦੀ ਹੈ", "idle_h1": "ਮੈਨੂੰ ਮਦਦ ਚਾਹੀਦੀ ਹੈ", "press": "ਮੈਨੂੰ ਮਦਦ ਚਾਹੀਦੀ ਹੈ", "press_busy": "ਮਦਦ ਬੁਲਾਈ ਜਾ ਰਹੀ ਹੈ…", "press_once": "ਇੱਕ ਵਾਰ ਦਬਾਓ।", "told": "{names} ਨੂੰ ਤੁਰੰਤ ਦੱਸ ਦਿੱਤਾ ਜਾਵੇਗਾ।", "told_none": "ਹਾਲੇ ਕਿਸੇ ਨੂੰ ਨਹੀਂ ਜੋੜਿਆ ਗਿਆ, ਇਸ ਲਈ ਇਹ ਬਟਨ ਕਿਸੇ ਤੱਕ ਨਹੀਂ ਪਹੁੰਚ ਸਕਦਾ।", "sent_h1": "ਮਦਦ ਬੁਲਾਈ ਗਈ ਹੈ", "sent_names": "{names} ਨੂੰ ਦੱਸ ਦਿੱਤਾ ਗਿਆ ਹੈ।", "waiting": "ਉਨ੍ਹਾਂ ਵਿੱਚੋਂ ਕਿਸੇ ਦੇ ਜਵਾਬ ਦੀ ਉਡੀਕ ਹੈ…", "cancel": "ਰੱਦ ਕਰੋ — ਮੈਂ ਠੀਕ ਹਾਂ", "cancelling": "ਰੱਦ ਕੀਤਾ ਜਾ ਰਿਹਾ ਹੈ…", "coming_h1": "{name} ਆ ਰਹੇ ਹਨ", "on_way": "ਰਾਹ ਵਿੱਚ ਹਨ।", "has_notes": "{name} ਕੋਲ ਤੁਹਾਡੀ ਮੈਡੀਕਲ ਜਾਣਕਾਰੀ ਹੈ।", "cancelled_h1": "ਰੱਦ ਕੀਤਾ ਗਿਆ", "cancelled_p": "ਸਭ ਨੂੰ ਦੱਸ ਦਿੱਤਾ ਗਿਆ ਹੈ ਕਿ ਸਭ ਠੀਕ ਹੈ।", "failed_h1": "ਭੇਜਿਆ ਨਹੀਂ ਜਾ ਸਕਿਆ", "retry": "ਫਿਰ ਕੋਸ਼ਿਸ਼ ਕਰੋ", "call_112": "ਜਾਂ ਹੁਣੇ 112 'ਤੇ ਫ਼ੋਨ ਕਰੋ।", "foot": "ਕੰਮ ਨਹੀਂ ਕਰ ਰਿਹਾ? ਫ਼ੋਨ ਕਰੋ", "and": " ਅਤੇ ", "location": "ਮਦਦ ਕਰਨ ਵਾਲਿਆਂ ਨੂੰ ਦੇਖਣ ਦਿਓ ਕਿ ਤੁਸੀਂ ਕਿੱਥੇ ਹੋ", "stepped_back": "{name} ਹੁਣ ਨਹੀਂ ਆ ਸਕਣਗੇ।", "name": "ਪੰਜਾਬੀ",
     },
     "or": {
-        "title": "ମୋତେ ସାହାଯ୍ୟ ଦରକାର", "idle_h1": "ମୋତେ ସାହାଯ୍ୟ ଦରକାର", "press": "ମୋତେ ସାହାଯ୍ୟ ଦରକାର", "press_busy": "ସାହାଯ୍ୟ ଡକାଯାଉଛି…", "press_once": "ଥରେ ଦବାନ୍ତୁ।", "told": "{names} ଙ୍କୁ ତୁରନ୍ତ ଜଣାଇ ଦିଆଯିବ।", "told_none": "ଏପର୍ଯ୍ୟନ୍ତ କାହାକୁ ଯୋଡ଼ାଯାଇନାହିଁ, ତେଣୁ ଏହି ବଟନ୍ କାହା ପାଖରେ ପହଞ୍ଚିପାରିବ ନାହିଁ।", "sent_h1": "ସାହାଯ୍ୟ ଡକାଯାଇଛି", "sent_names": "{names} ଙ୍କୁ ଜଣାଇ ଦିଆଯାଇଛି।", "waiting": "ସେମାନଙ୍କ ମଧ୍ୟରୁ କାହାର ଉତ୍ତରକୁ ଅପେକ୍ଷା କରୁଛୁ…", "cancel": "ବାତିଲ କରନ୍ତୁ — ମୁଁ ଠିକ୍ ଅଛି", "cancelling": "ବାତିଲ କରାଯାଉଛି…", "coming_h1": "{name} ଆସୁଛନ୍ତି", "on_way": "ବାଟରେ ଅଛନ୍ତି।", "has_notes": "{name} ଙ୍କ ପାଖରେ ଆପଣଙ୍କ ଡାକ୍ତରୀ ତଥ୍ୟ ଅଛି।", "cancelled_h1": "ବାତିଲ ହୋଇଛି", "cancelled_p": "ସମସ୍ତଙ୍କୁ ଜଣାଇ ଦିଆଯାଇଛି ଯେ ସବୁ ଠିକ୍ ଅଛି।", "failed_h1": "ପଠାଯାଇପାରିଲା ନାହିଁ", "retry": "ପୁଣି ଚେଷ୍ଟା କରନ୍ତୁ", "call_112": "କିମ୍ବା ଏବେ 112 କୁ ଫୋନ୍ କରନ୍ତୁ।", "foot": "କାମ କରୁନାହିଁ? ଫୋନ୍ କରନ୍ତୁ", "and": " ଏବଂ ", "location": "ସାହାଯ୍ୟକାରୀମାନେ ଦେଖନ୍ତୁ ଆପଣ କେଉଁଠି ଅଛନ୍ତି", "name": "ଓଡ଼ିଆ",
+        "title": "ମୋତେ ସାହାଯ୍ୟ ଦରକାର", "idle_h1": "ମୋତେ ସାହାଯ୍ୟ ଦରକାର", "press": "ମୋତେ ସାହାଯ୍ୟ ଦରକାର", "press_busy": "ସାହାଯ୍ୟ ଡକାଯାଉଛି…", "press_once": "ଥରେ ଦବାନ୍ତୁ।", "told": "{names} ଙ୍କୁ ତୁରନ୍ତ ଜଣାଇ ଦିଆଯିବ।", "told_none": "ଏପର୍ଯ୍ୟନ୍ତ କାହାକୁ ଯୋଡ଼ାଯାଇନାହିଁ, ତେଣୁ ଏହି ବଟନ୍ କାହା ପାଖରେ ପହଞ୍ଚିପାରିବ ନାହିଁ।", "sent_h1": "ସାହାଯ୍ୟ ଡକାଯାଇଛି", "sent_names": "{names} ଙ୍କୁ ଜଣାଇ ଦିଆଯାଇଛି।", "waiting": "ସେମାନଙ୍କ ମଧ୍ୟରୁ କାହାର ଉତ୍ତରକୁ ଅପେକ୍ଷା କରୁଛୁ…", "cancel": "ବାତିଲ କରନ୍ତୁ — ମୁଁ ଠିକ୍ ଅଛି", "cancelling": "ବାତିଲ କରାଯାଉଛି…", "coming_h1": "{name} ଆସୁଛନ୍ତି", "on_way": "ବାଟରେ ଅଛନ୍ତି।", "has_notes": "{name} ଙ୍କ ପାଖରେ ଆପଣଙ୍କ ଡାକ୍ତରୀ ତଥ୍ୟ ଅଛି।", "cancelled_h1": "ବାତିଲ ହୋଇଛି", "cancelled_p": "ସମସ୍ତଙ୍କୁ ଜଣାଇ ଦିଆଯାଇଛି ଯେ ସବୁ ଠିକ୍ ଅଛି।", "failed_h1": "ପଠାଯାଇପାରିଲା ନାହିଁ", "retry": "ପୁଣି ଚେଷ୍ଟା କରନ୍ତୁ", "call_112": "କିମ୍ବା ଏବେ 112 କୁ ଫୋନ୍ କରନ୍ତୁ।", "foot": "କାମ କରୁନାହିଁ? ଫୋନ୍ କରନ୍ତୁ", "and": " ଏବଂ ", "location": "ସାହାଯ୍ୟକାରୀମାନେ ଦେଖନ୍ତୁ ଆପଣ କେଉଁଠି ଅଛନ୍ତି", "stepped_back": "{name} ଏବେ ଆସିପାରିବେ ନାହିଁ।", "name": "ଓଡ଼ିଆ",
     },
 }
 
@@ -765,6 +847,7 @@ PAGE = Template("""<!doctype html>
 
 <main id="sent" hidden>
   <h1 data-i18n="sent_h1">Help is being called</h1>
+  <p id="sent-back" hidden></p>
   <p><span id="sent-names"></span><br><span class="time" id="sent-time"></span></p>
   <p class="muted" data-i18n="waiting">Waiting for one of them to answer…</p>
   <button class="btn btn-secondary" id="cancel" data-i18n="cancel">Cancel — I’m OK</button>
@@ -796,7 +879,7 @@ PAGE = Template("""<!doctype html>
   var names = $names_json;
   var strings = $strings_json;
   var running = $running_json;  // an alert already open for her, if the app was reopened during one
-  var incident = null, poll = null, lang = "en", claimer = "", hasNotes = false;
+  var incident = null, poll = null, lang = "en", claimer = "", hasNotes = false, back = "", shown = null;
   var esc = function (s) { return String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;"); };
   var t = function (key) { return strings[lang][key] || strings.en[key]; };
   var joinNames = function (n) {
@@ -822,6 +905,7 @@ PAGE = Template("""<!doctype html>
     document.getElementById("coming-name").textContent = t("coming_h1").replace("{name}", claimer);
     document.getElementById("coming-record").innerHTML = fill("has_notes", "name", claimer);
     document.getElementById("coming-record").hidden = !hasNotes;
+    if (back) document.getElementById("sent-back").innerHTML = fill("stepped_back", "name", back);
   };
   setLang(new URLSearchParams(location.search).get("lang") || load("lang") || "en");
   document.getElementById("lang").addEventListener("click", function () { setLang(lang === "en" ? her : "en"); });
@@ -842,6 +926,8 @@ PAGE = Template("""<!doctype html>
     speak(text);
   };
   var show = function (id) {
+    if (id === shown) return;
+    shown = id;
     ["idle", "sent", "failed", "coming", "cancelled"].forEach(function (s) { document.getElementById(s).hidden = (s !== id); });
     if (id !== "idle") say(Array.prototype.map.call(document.querySelectorAll("#" + id + " h1, #" + id + " p:not([hidden])"),
       function (e) { return e.innerText; }).join(" ").replace(/\\s+/g, " ").trim());
@@ -857,8 +943,15 @@ PAGE = Template("""<!doctype html>
         document.getElementById("coming-time").textContent = s.claimed_at;
         document.getElementById("coming-record").innerHTML = fill("has_notes", "name", claimer);
         document.getElementById("coming-record").hidden = !hasNotes;
-        show("coming"); stopPoll();
+        show("coming");
       } else if (s.status === "CANCELLED") { show("cancelled"); stopPoll(); }
+      else if (s.stepped_back && s.told) {  // the one who was coming can't after all: the alert is open again
+        back = s.stepped_back;
+        document.getElementById("sent-back").innerHTML = fill("stepped_back", "name", back);
+        document.getElementById("sent-back").hidden = false;
+        document.getElementById("sent-names").innerHTML = fill("sent_names", "names", joinNames(s.told));
+        show("sent");
+      }
     }).catch(function () {});
   };
   var cancel = function (ev) {
@@ -901,6 +994,7 @@ PAGE = Template("""<!doctype html>
       .then(function (r) { if (!r.ok) throw new Error(r.status); return r.json(); })
       .then(function (data) {
         incident = data.incident_id;
+        back = ""; document.getElementById("sent-back").hidden = true;
         locate(incident);
         names = data.told || names;
         document.getElementById("sent-names").innerHTML = fill("sent_names", "names", joinNames(names));
@@ -961,6 +1055,19 @@ $where
 <h2>$name’s medical notes</h2>
 <p class="muted">Released because you’re going. $name is told you opened this.</p>
 $record
+$release
+<p class="muted"><a href="/incident/$incident_id">What happened, in order</a></p>
+"""))
+
+RELEASE_FORM = Template("""<hr>
+<p class="muted">Can’t go after all? Say so — the next people on her list are contacted at once.</p>
+<form method="post" action="/release/$token"><button class="btn btn-secondary btn-inline" type="submit">I can’t go after all</button></form>
+""")
+
+CLAIM_RELEASED = Template(_page("You’ve stepped back", """
+<div class="card card-caution"><h1>You’ve stepped back</h1>
+<p>$name and everyone contacted have been told you can’t go after all.<br>The next people on her list are being contacted now.</p></div>
+<p class="muted">If that changes, open your link again — it still works.</p>
 <p class="muted"><a href="/incident/$incident_id">What happened, in order</a></p>
 """))
 

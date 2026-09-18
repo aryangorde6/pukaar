@@ -1,7 +1,7 @@
 """Every message the system sends. One render(kind, ctx) -> (subject, text, html) for
 email; render_telegram(kind, ctx) -> (text, button) for Telegram.
 
-Kinds: first_alert, widened, someone_going, false_alarm, no_one_reached, checkin.
+Kinds: first_alert, widened, someone_going, stepped_back, false_alarm, no_one_reached, checkin.
 Words a neighbour would not use never appear here: no "incident", "tier",
 "escalation", "claim". People are named. Every message offers 112.
 """
@@ -10,7 +10,7 @@ from string import Template
 
 # ctx keys used below:
 #   subject_name, address_line1, address_line2, pressed_at, minutes_ago,
-#   contacted_count, claim_url, claimer_name, claimed_at, cancelled_at
+#   contacted_count, claim_url, claimer_name, claimed_at, cancelled_at, released_name
 
 TEXT = {
     "first_alert": Template("""$subject_name needs help
@@ -49,6 +49,19 @@ Nothing more is needed from you.
 
 Thank you for being on her list.
 """),
+    "stepped_back": Template("""$released_name can't go after all
+
+$released_name said they were going, and now can't. No one is going to $subject_name.
+She pressed her help button at $pressed_at - $minutes_ago minutes ago.
+
+$address_line1
+$address_line2
+
+I can go now: $claim_url
+
+The next people on her list are being contacted too.
+If you think this is serious, call 112.
+"""),
     "false_alarm": Template("""False alarm - $subject_name is OK
 
 She cancelled the alert at $cancelled_at.
@@ -86,6 +99,7 @@ SUBJECT = {
     "first_alert": Template("$subject_name needs help now — $pressed_at"),
     "widened": Template("Still no one — $subject_name needs help"),
     "someone_going": Template("$claimer_name is going to $subject_name — nothing needed"),
+    "stepped_back": Template("$released_name can't go after all — $subject_name still needs help"),
     "false_alarm": Template("False alarm — $subject_name is OK"),
     "no_one_reached": Template("URGENT: no one has reached $subject_name"),
     "checkin": Template("Check-in from $subject_name's list — not an emergency"),
@@ -132,6 +146,13 @@ HTML = {
 <p style="{_P}">Nothing more is needed from you.</p>
 <p style="{_MUTED}">Thank you for being on her list.</p>
 """,
+    "stepped_back": lambda c: f"""
+<h1 style="{_TITLE}">{c['released_name']} can't go after all</h1>
+<p style="{_P}"><strong>{c['released_name']}</strong> said they were going, and now can't. <strong>No one is going to {c['subject_name']}.</strong><br>She pressed her help button at <strong>{c['pressed_at']}</strong> — {c['minutes_ago']} minutes ago.</p>
+{_address(c)}
+{_button(c)}
+<p style="{_MUTED}">The next people on her list are being contacted too.<br>If you think this is serious, call <strong>112</strong>.</p>
+""",
     "false_alarm": lambda c: f"""
 <h1 style="{_TITLE}">False alarm — {c['subject_name']} is OK</h1>
 <p style="{_P}">She cancelled the alert at <strong>{c['cancelled_at']}</strong>.</p>
@@ -155,7 +176,7 @@ HTML = {
 }
 
 
-# The same five messages for Telegram: shorter, the link is a button, HTML parse mode
+# The same messages for Telegram: shorter, the link is a button, HTML parse mode
 # (so values are escaped below). "I can go now" stays a button here too - GET never writes.
 TELEGRAM = {
     "first_alert": Template("""🆘 <b>$subject_name needs help</b>
@@ -176,6 +197,13 @@ You are one of $contacted_count people now contacted. If you can't go, please ca
     "someone_going": Template("""✓ <b>$claimer_name is going</b>
 $claimer_name said they're going at $claimed_at. $subject_name has been told they're coming.
 Nothing more is needed from you."""),
+    "stepped_back": Template("""<b>$released_name can't go after all</b>
+$released_name said they were going, and now can't. No one is going to $subject_name. She pressed her help button at $pressed_at, $minutes_ago minutes ago.
+
+<b>$address_line1</b>
+$address_line2
+
+The next people on her list are being contacted too. If you think this is serious, call 112."""),
     "false_alarm": Template("""<b>False alarm — $subject_name is OK</b>
 She cancelled the alert at $cancelled_at. Nothing is needed. Sorry for the interruption."""),
     "checkin": Template("""<b>Not an emergency — $subject_name is fine.</b>
@@ -189,7 +217,7 @@ $address_line2
 Please call 112 for her now, or go if you can."""),
 }
 TELEGRAM_BUTTON = {"first_alert": "I CAN GO NOW", "widened": "I CAN GO NOW", "no_one_reached": "I CAN GO NOW",
-                   "checkin": "I’D BE REACHABLE NOW"}
+                   "stepped_back": "I CAN GO NOW", "checkin": "I’D BE REACHABLE NOW"}
 
 
 def render_telegram(kind, ctx):

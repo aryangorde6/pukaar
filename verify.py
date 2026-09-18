@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Sixteen checks against the live stack. Each asserts on rows and execution history,
+"""Seventeen checks against the live stack. Each asserts on rows and execution history,
 never on a status code alone - SUCCEEDED with nothing in the tables is a failure.
 
 Every check requires something positive to exist. A check that would pass against
@@ -389,6 +389,37 @@ check("16 her phone's position reaches the live alert and the responder's page, 
       and "maps.google.com/?q=19.01765,72.84268" in a_page and st2 == 409 and b_loc is None,
       f"live alert -> {st1}, row lat {a_loc and a_loc['lat']['N']}, on the page: {'Her phone, at' in a_page}; "
       f"finished alert -> {st2}, written: {b_loc is not None}")
+
+# 17. "I can't go after all": the one who claimed steps back. The alert reopens with the step-back
+#     on its row, everyone else contacted is told with a fresh link, her page hears who stepped back
+#     and who is told now, and the machine resumes at the next circle - not from the start - with the
+#     timers the alert began with; a stranger's link cannot do it
+w_tok = {"anil": t_anil, "vaishali": t_vaish}[winners[0]] if winners else ""
+st0, _ = http("POST", f"release/{plant_token(c_id, 'sunil')}")
+c_before = incident(c_id)
+circle = sorted(r["contact_id"]["S"] for r in rows(c_id) if r["tier"]["N"] == "1" and r.get("delivered", {}).get("BOOL"))
+st1, p1 = http("POST", f"release/{w_tok}")
+c_inc = incident(c_id)
+rel = [r["M"] for r in c_inc.get("releases", {}).get("L", [])]
+r_rows = sorted(r["contact_id"]["S"] for r in rows(c_id) if r["contact_tier"]["S"].endswith("#R") and r.get("delivered", {}).get("BOOL"))
+c_status = json.loads(http("GET", f"status/{c_id}")[1])
+r_arn = SM.replace(":stateMachine:", ":execution:") + f":{c_id}-r1"
+r_status = wait_done(r_arn)
+r_states, r_picks = states(r_arn), select_tier_outputs(r_arn)
+c_after = incident(c_id)
+check("17 the one who claimed steps back: reopened, everyone told, resumed at the next circle",
+      st0 == 200 and c_before["status"]["S"] == "CLAIMED" and st1 == 200 and "stepped back" in p1
+      and c_inc["status"]["S"] == "OPEN" and "claimed_by" not in c_inc and len(rel) == 1 and rel[0]["contact_id"]["S"] == winners[0]
+      and r_rows == [c for c in circle if c != winners[0]] and len(r_rows) >= 2
+      and c_status.get("stepped_back") == winner_name and winner_name not in c_status.get("told", []) and len(c_status.get("told", [])) >= 2
+      and r_status == "SUCCEEDED" and r_states[:3] == ["Start", "ResumeIncident", "SelectTier"] and "CreateIncident" not in r_states
+      and r_picks and r_picks[0]["tier_index"] == 2 and r_picks[0]["wait_s"] == 25 and "FinalFallback" in r_states
+      and c_after["status"]["S"] == "FALLBACK",
+      f"stranger's link -> {st0}, still claimed: {c_before['status']['S'] == 'CLAIMED'}; {winners[0]} steps back -> {st1}, "
+      f"row {c_inc['status']['S']}, releases {[r['contact_id']['S'] for r in rel]}; told with fresh links: {r_rows}; "
+      f"her page: stepped_back={c_status.get('stepped_back')}, told {c_status.get('told')}; resumed run {r_status}: "
+      f"{r_states[:3]} … tier {r_picks[0]['tier_index'] if r_picks else '-'} wait_s {r_picks[0]['wait_s'] if r_picks else '-'}, "
+      f"ends {r_states[-2:]}; row now {c_after['status']['S']}")
 
 print()
 passed = sum(1 for _, ok in results if ok)

@@ -477,8 +477,27 @@ resource "aws_sfn_state_machine" "escalation" {
 
   definition = jsonencode({
     Comment = "One press: open the incident, wait for someone to say they are going, decide."
-    StartAt = "CreateIncident"
+    StartAt = "Start"
     States = {
+      # A fresh press opens a row. A resumed alert - the one who said they were going
+      # stepped back - already has one: pick it up at the circle it had reached.
+      Start = {
+        Type    = "Choice"
+        Choices = [{ Variable = "$.resumed", IsPresent = true, Next = "ResumeIncident" }]
+        Default = "CreateIncident"
+      }
+      ResumeIncident = {
+        Type     = "Task"
+        Resource = aws_lambda_function.fn["create_incident"].arn
+        Parameters = {
+          "incident_id.$" = "$.incident_id"
+          resumed         = true
+        }
+        ResultPath = "$"
+        Retry      = local.lambda_retry
+        Catch      = local.spine_catch
+        Next       = "SelectTier"
+      }
       CreateIncident = {
         Type     = "Task"
         Resource = aws_lambda_function.fn["create_incident"].arn

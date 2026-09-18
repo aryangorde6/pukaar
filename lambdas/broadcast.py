@@ -1,8 +1,11 @@
-"""The three ways an escalation ends, told to the people who were paged.
+"""The three ways an escalation ends, told to the people who were paged - and the one
+way it starts again.
 
     kind = someone_going    everyone reached, claimer included: who is coming, nothing needed
     kind = false_alarm      everyone reached: she cancelled, sorry, nothing needed
     kind = no_one_reached   everyone on her list, with a fresh link each: please call 112, or go
+    kind = stepped_back     the people in `contacts` - everyone reached when the claimer stepped
+                            back, but them - with a fresh link each: no one is going after all
 
 Sends are best-effort per person: one bad address is logged on its row and does
 not stop the others. Anyone who has her Telegram bot is told there as well; a person
@@ -53,6 +56,7 @@ def handler(event, context):
                            ExpressionAttributeValues={":i": {"S": incident_id}, ":t": {"BOOL": True}})["Items"]
     }
 
+    released = [r["M"] for r in incident.get("releases", {}).get("L", [])]
     parts = subject["address"]["S"].split(", ")
     ctx = {
         "subject_name": subject["name"]["S"],
@@ -64,8 +68,11 @@ def handler(event, context):
         "claimed_at": fmt(incident["claimed_at"]["N"]) if "claimed_at" in incident else "",
         "cancelled_at": fmt(incident["cancelled_at"]["N"]) if "cancelled_at" in incident else "",
         "contacted_count": len(reached_ids),
+        "released_name": released[-1]["name"]["S"] if released else "",
     }
 
+    # A fresh link for anyone asked to go again; its row is the fallback's (#F) or the step-back's (#R).
+    suffix = {"no_one_reached": "F", "stepped_back": "R"}.get(kind)
     if kind == "no_one_reached":
         recipients = list(contacts.values())
         ddb.update_item(TableName=INCIDENTS, Key={"incident_id": {"S": incident_id}},
@@ -73,14 +80,17 @@ def handler(event, context):
                         ConditionExpression="#s = :open",
                         ExpressionAttributeNames={"#s": "status"},
                         ExpressionAttributeValues={":f": {"S": "FALLBACK"}, ":open": {"S": "OPEN"}, ":t": {"N": str(now)}})
+    elif kind == "stepped_back":
+        # Fixed by the web handler before the machine resumed: the rows may already be moving on.
+        recipients = [contacts[c] for c in event["contacts"] if c in contacts]
     else:
         recipients = [contacts[c] for c in reached_ids if c in contacts]
 
     told, failed = [], []
     for c in recipients:
         this_ctx = dict(ctx)
-        if kind == "no_one_reached":
-            this_ctx["claim_url"] = BASE_URL + "claim/" + new_token(incident_id, c["contact_id"], now)
+        if suffix:
+            this_ctx["claim_url"] = BASE_URL + "claim/" + new_token(incident_id, c["contact_id"], now, suffix)
         subject_line, text, html = render(kind, this_ctx)
         try:
             ses.send_email(FromEmailAddress=SENDER, Destination={"ToAddresses": [c["email"]]},
@@ -91,9 +101,9 @@ def handler(event, context):
         except ClientError as e:
             emailed, reason = False, e.response["Error"]["Code"]
         tg_id = telegram.send(c["telegram"], *render_telegram(kind, this_ctx)) if c["telegram"] else None
-        if tg_id and kind == "no_one_reached":
+        if tg_id and suffix:
             ddb.update_item(TableName=NOTIFICATIONS,
-                            Key={"incident_id": {"S": incident_id}, "contact_tier": {"S": f"{c['contact_id']}#F"}},
+                            Key={"incident_id": {"S": incident_id}, "contact_tier": {"S": f"{c['contact_id']}#{suffix}"}},
                             UpdateExpression="SET channel = :c, telegram_message_id = :g",
                             ExpressionAttributeValues={":c": {"S": "email+telegram" if emailed else "telegram"}, ":g": {"S": tg_id}})
         if emailed or tg_id:
@@ -110,10 +120,10 @@ def handler(event, context):
     return {**event, "broadcast": {"kind": kind, "told": told, "failed": failed}}
 
 
-def new_token(incident_id, contact_id, now):
+def new_token(incident_id, contact_id, now, suffix):
     token = secrets.token_urlsafe(24)
     ddb.put_item(TableName=NOTIFICATIONS, Item={
-        "incident_id": {"S": incident_id}, "contact_tier": {"S": f"{contact_id}#F"},
+        "incident_id": {"S": incident_id}, "contact_tier": {"S": f"{contact_id}#{suffix}"},
         "contact_id": {"S": contact_id}, "tier": {"N": "99"},
         "token_hash": {"S": hashlib.sha256(token.encode()).hexdigest()},
         "channel": {"S": "email"}, "delivered": {"BOOL": True}, "created_at": {"N": str(now)}, "sent_at": {"N": str(now)},
