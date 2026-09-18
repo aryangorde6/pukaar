@@ -145,7 +145,8 @@ def trigger_page():
     else:
         told = "No one has been added yet, so this button cannot reach anyone."
         disabled = "disabled"
-    return PAGE.substitute(told=told, disabled=disabled, names_json=json.dumps(names))
+    return PAGE.substitute(told=told, disabled=disabled, names_json=json.dumps(names),
+                           strings_json=json.dumps(STRINGS, ensure_ascii=False))
 
 
 def trigger():
@@ -369,7 +370,12 @@ def escape(s):
 # --- home screen --------------------------------------------------------------
 
 STATIC_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "static")
-ICONS = {f"/icon-{n}.png": open(os.path.join(STATIC_DIR, f"icon-{n}.png"), "rb").read() for n in (192, 512)}
+def _read(name):
+    with open(os.path.join(STATIC_DIR, name), "rb") as f:
+        return f.read()
+
+
+ICONS = {f"/icon-{n}.png": _read(f"icon-{n}.png") for n in (192, 512)}
 MANIFEST = json.dumps({
     "name": "Pukaar",
     "short_name": "Pukaar",
@@ -383,6 +389,40 @@ MANIFEST = json.dumps({
         {"src": "/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any maskable"},
     ],
 })
+
+
+# --- her page, in her language ------------------------------------------------
+# Only her page is translated: the people paged are younger and the pages they get are
+# English. English is served; the toggle (or ?lang=mr) switches, and the phone remembers.
+
+STRINGS = {
+    "en": {
+        "title": "I need help", "idle_h1": "I NEED HELP", "press": "I need help",
+        "press_busy": "Calling for help…", "press_once": "Press once.",
+        "told": "{names} will be told straight away.",
+        "told_none": "No one has been added yet, so this button cannot reach anyone.",
+        "sent_h1": "Help is being called", "sent_names": "{names} have been told.",
+        "waiting": "Waiting for one of them to answer…", "cancel": "Cancel — I’m OK",
+        "cancelling": "Cancelling…", "coming_h1": "{name} is coming", "on_way": "On the way now.",
+        "has_notes": "{name} has your medical notes.", "cancelled_h1": "Cancelled",
+        "cancelled_p": "Everyone has been told it was a false alarm.",
+        "failed_h1": "Couldn’t send", "retry": "Try again", "call_112": "Or call 112 now.",
+        "foot": "Not working? Call", "and": " and ", "other_lang": "मराठी",
+    },
+    "mr": {
+        "title": "मला मदत हवी आहे", "idle_h1": "मला मदत हवी आहे", "press": "मला मदत हवी आहे",
+        "press_busy": "मदत बोलावत आहे…", "press_once": "एकदाच दाबा.",
+        "told": "{names} यांना लगेच कळवले जाईल.",
+        "told_none": "अजून कोणालाही जोडलेले नाही, त्यामुळे हे बटण कोणापर्यंत पोहोचू शकत नाही.",
+        "sent_h1": "मदत बोलावली आहे", "sent_names": "{names} यांना कळवले आहे.",
+        "waiting": "त्यांपैकी कोणीतरी उत्तर देण्याची वाट पाहत आहोत…", "cancel": "रद्द करा — मी ठीक आहे",
+        "cancelling": "रद्द करत आहे…", "coming_h1": "{name} येत आहे", "on_way": "वाटेत आहेत.",
+        "has_notes": "{name} यांच्याकडे तुमच्या वैद्यकीय नोंदी आहेत.", "cancelled_h1": "रद्द केले",
+        "cancelled_p": "सर्वांना कळवले आहे की सगळे ठीक आहे.",
+        "failed_h1": "पाठवता आले नाही", "retry": "पुन्हा प्रयत्न करा", "call_112": "किंवा आत्ताच 112 ला फोन करा.",
+        "foot": "चालत नाही? फोन करा", "and": " आणि ", "other_lang": "English",
+    },
+}
 
 
 # --- pages --------------------------------------------------------------------
@@ -446,6 +486,11 @@ hr { border: 0; border-top: 2px solid var(--border); margin: var(--space-6) 0; }
 a[href^="tel:"] { color: inherit; display: inline-block; min-height: 48px; line-height: 48px; padding: 0 var(--space-3);
   margin: -14px calc(-1 * var(--space-3)); font-weight: 700; text-underline-offset: 4px; }
 a:focus-visible { outline: 4px solid var(--ink); outline-offset: 3px; border-radius: 6px; }
+.langbar { text-align: right; margin: 0 0 var(--space-4); }
+.btn-lang { min-height: 48px; padding: 0 var(--space-4); border-radius: 999px; cursor: pointer;
+  background: var(--surface); color: var(--ink); border: 2px solid var(--border); font: inherit;
+  font-size: var(--text-sm); font-weight: 700; }
+.btn-lang:focus-visible { outline: 4px solid var(--ink); outline-offset: 3px; }
 [hidden] { display: none !important; }
 .sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
 """
@@ -465,45 +510,71 @@ PAGE = Template("""<!doctype html>
 </head>
 <body>
 <div class="sr-only" aria-live="assertive" id="announce"></div>
+<p class="langbar"><button class="btn-lang" id="lang" data-i18n="other_lang" lang="mr">मराठी</button></p>
 
 <main id="idle">
-  <h1>I NEED HELP</h1>
-  <button class="btn btn-emergency" id="press" $disabled>I need help</button>
-  <p style="margin-top: var(--space-6)">Press once.<br>$told</p>
+  <h1 data-i18n="idle_h1">I NEED HELP</h1>
+  <button class="btn btn-emergency" id="press" data-i18n="press" $disabled>I need help</button>
+  <p style="margin-top: var(--space-6)"><span data-i18n="press_once">Press once.</span><br><span id="told">$told</span></p>
 </main>
 
 <main id="sent" hidden>
-  <h1>Help is being called</h1>
-  <p><strong id="sent-names"></strong> have been told.<br><span class="time" id="sent-time"></span></p>
-  <p class="muted">Waiting for one of them to answer…</p>
-  <button class="btn btn-secondary" id="cancel">Cancel — I’m OK</button>
+  <h1 data-i18n="sent_h1">Help is being called</h1>
+  <p><span id="sent-names"></span><br><span class="time" id="sent-time"></span></p>
+  <p class="muted" data-i18n="waiting">Waiting for one of them to answer…</p>
+  <button class="btn btn-secondary" id="cancel" data-i18n="cancel">Cancel — I’m OK</button>
 </main>
 
 <main id="coming" hidden>
-  <div class="card card-safe"><h1>&#10003; <span id="coming-name"></span> is coming</h1>
-  <p>On the way now.<br><span class="time" id="coming-time"></span></p>
-  <p id="coming-record" hidden><span id="coming-record-name"></span> has your medical notes.</p></div>
-  <button class="btn btn-secondary" id="cancel2">Cancel — I’m OK</button>
+  <div class="card card-safe"><h1>&#10003; <span id="coming-name"></span></h1>
+  <p><span data-i18n="on_way">On the way now.</span><br><span class="time" id="coming-time"></span></p>
+  <p id="coming-record" hidden></p></div>
+  <button class="btn btn-secondary" id="cancel2" data-i18n="cancel">Cancel — I’m OK</button>
 </main>
 
 <main id="cancelled" hidden>
-  <div class="card card-caution"><h1>Cancelled</h1>
-  <p>Everyone has been told it was a false alarm.</p></div>
-  <button class="btn btn-emergency" id="again">I need help</button>
+  <div class="card card-caution"><h1 data-i18n="cancelled_h1">Cancelled</h1>
+  <p data-i18n="cancelled_p">Everyone has been told it was a false alarm.</p></div>
+  <button class="btn btn-emergency" id="again" data-i18n="press">I need help</button>
 </main>
 
 <main id="failed" hidden>
-  <div class="card card-emergency"><h1>&#9888; Couldn’t send</h1></div>
-  <button class="btn btn-emergency" id="retry">Try again</button>
-  <p style="margin-top: var(--space-6)"><strong>Or call 112 now.</strong></p>
+  <div class="card card-emergency"><h1>&#9888; <span data-i18n="failed_h1">Couldn’t send</span></h1></div>
+  <button class="btn btn-emergency" id="retry" data-i18n="retry">Try again</button>
+  <p style="margin-top: var(--space-6)"><strong data-i18n="call_112">Or call 112 now.</strong></p>
 </main>
 
-<p class="foot">Not working? Call <a href="tel:112">112</a></p>
+<p class="foot"><span data-i18n="foot">Not working? Call</span> <a href="tel:112">112</a></p>
 
 <script>
 (function () {
   var names = $names_json;
-  var incident = null, poll = null;
+  var strings = $strings_json;
+  var incident = null, poll = null, lang = "en", claimer = "", hasNotes = false;
+  var esc = function (s) { return String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;"); };
+  var t = function (key) { return strings[lang][key]; };
+  var joinNames = function (n) {
+    return n.length < 2 ? n.join("") : n.slice(0, -1).join(", ") + t("and") + n[n.length - 1];
+  };
+  var fill = function (key, name, value) {
+    return t(key).replace("{" + name + "}", "<strong>" + esc(value) + "</strong>");
+  };
+  var setLang = function (l) {
+    lang = strings[l] ? l : "en";
+    try { localStorage.setItem("lang", lang); } catch (e) {}
+    document.documentElement.lang = lang;
+    document.title = t("title");
+    Array.prototype.forEach.call(document.querySelectorAll("[data-i18n]"), function (e) { e.textContent = t(e.getAttribute("data-i18n")); });
+    document.getElementById("lang").lang = lang === "en" ? "mr" : "en";
+    document.getElementById("told").innerHTML = names.length ? fill("told", "names", joinNames(names)) : t("told_none");
+    document.getElementById("sent-names").innerHTML = fill("sent_names", "names", joinNames(names));
+    document.getElementById("coming-name").textContent = t("coming_h1").replace("{name}", claimer);
+    document.getElementById("coming-record").innerHTML = fill("has_notes", "name", claimer);
+    document.getElementById("coming-record").hidden = !hasNotes;
+  };
+  var wanted = (new URLSearchParams(location.search).get("lang")) || (function () { try { return localStorage.getItem("lang"); } catch (e) { return null; } })();
+  setLang(wanted || "en");
+  document.getElementById("lang").addEventListener("click", function () { setLang(lang === "en" ? "mr" : "en"); });
   var say = function (text) {
     var a = document.getElementById("announce"); a.textContent = ""; setTimeout(function () { a.textContent = text; }, 50);
   };
@@ -517,10 +588,11 @@ PAGE = Template("""<!doctype html>
     if (!incident) return;
     fetch("/status/" + incident).then(function (r) { return r.json(); }).then(function (s) {
       if (s.status === "CLAIMED") {
-        document.getElementById("coming-name").textContent = s.claimed_by_name;
+        claimer = s.claimed_by_name; hasNotes = !!s.record_opened_at;
+        document.getElementById("coming-name").textContent = t("coming_h1").replace("{name}", claimer);
         document.getElementById("coming-time").textContent = s.claimed_at;
-        document.getElementById("coming-record-name").textContent = s.claimed_by_name;
-        document.getElementById("coming-record").hidden = !s.record_opened_at;
+        document.getElementById("coming-record").innerHTML = fill("has_notes", "name", claimer);
+        document.getElementById("coming-record").hidden = !hasNotes;
         show("coming"); stopPoll();
       } else if (s.status === "CANCELLED") { show("cancelled"); stopPoll(); }
     }).catch(function () {});
@@ -528,7 +600,7 @@ PAGE = Template("""<!doctype html>
   var cancel = function (ev) {
     if (!incident) return;
     var btn = ev.currentTarget, label = btn.textContent;
-    btn.disabled = true; btn.textContent = "Cancelling…";
+    btn.disabled = true; btn.textContent = t("cancelling");
     var restore = function () { btn.disabled = false; btn.textContent = label; };
     fetch("/cancel", { method: "POST", headers: { "content-type": "application/json" },
       body: JSON.stringify({ incident_id: incident }) })
@@ -536,23 +608,21 @@ PAGE = Template("""<!doctype html>
       .then(function (s) { if (s.status === "CANCELLED") { show("cancelled"); stopPoll(); } else { check(); } restore(); })
       .catch(restore);
   };
-  var joinNames = function (n) {
-    return n.length < 2 ? n.join("") : n.slice(0, -1).join(", ") + " and " + n[n.length - 1];
-  };
   var press = function () {
     var btn = document.getElementById("press");
-    btn.disabled = true; btn.textContent = "Calling for help…";
+    btn.disabled = true; btn.textContent = t("press_busy");
     fetch("/trigger", { method: "POST" })
       .then(function (r) { if (!r.ok) throw new Error(r.status); return r.json(); })
       .then(function (data) {
         incident = data.incident_id;
-        document.getElementById("sent-names").textContent = joinNames(data.told || names);
+        names = data.told || names;
+        document.getElementById("sent-names").innerHTML = fill("sent_names", "names", joinNames(names));
         document.getElementById("sent-time").textContent =
           new Date().toLocaleTimeString("en-IN", { hour: "numeric", minute: "2-digit" });
         show("sent");
         stopPoll(); poll = setInterval(check, 3000);
       })
-      .catch(function () { btn.disabled = false; btn.textContent = "I need help"; show("failed"); });
+      .catch(function () { btn.disabled = false; btn.textContent = t("press"); show("failed"); });
   };
   document.getElementById("press").addEventListener("click", press);
   document.getElementById("retry").addEventListener("click", function () { show("idle"); press(); });
