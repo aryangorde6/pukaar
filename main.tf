@@ -10,6 +10,10 @@ terraform {
       source  = "hashicorp/archive"
       version = "~> 2.4"
     }
+    random = {
+      source  = "hashicorp/random"
+      version = "~> 3.6"
+    }
   }
 }
 
@@ -328,6 +332,13 @@ locals {
   }
 }
 
+# Her page carries this key and nothing else does: a cancel or a position needs it,
+# so a responder's link or a timeline id cannot call off her alert or move her.
+resource "random_password" "her_key" {
+  length  = 32
+  special = false
+}
+
 # The web function is declared on its own: the fan-out functions need its URL
 # for the links in their emails, and a function cannot depend on its own URL.
 resource "aws_lambda_function" "web" {
@@ -341,7 +352,7 @@ resource "aws_lambda_function" "web" {
   source_code_hash = data.archive_file.lambdas.output_base64sha256
 
   environment {
-    variables = local.lambda_env
+    variables = merge(local.lambda_env, { HER_KEY = random_password.her_key.result })
   }
 
   depends_on = [aws_cloudwatch_log_group.lambda]
@@ -724,6 +735,11 @@ moved {
 
 output "record_key" {
   value = aws_kms_alias.record.name
+}
+
+output "her_key" {
+  value     = random_password.her_key.result # read by verify.sh and shoot.sh to cancel as her page would
+  sensitive = true
 }
 
 output "telegram_chat_ids" {

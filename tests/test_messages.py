@@ -9,7 +9,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 for var in ("CONTACTS_TABLE", "SUBJECTS_TABLE", "INCIDENTS_TABLE", "NOTIFICATIONS_TABLE", "RESPONSE_STATS_TABLE",
-            "STATE_MACHINE_ARN", "BROADCAST_FN", "SUBJECT_ID"):
+            "STATE_MACHINE_ARN", "BROADCAST_FN", "SUBJECT_ID", "HER_KEY"):
     os.environ.setdefault(var, "x")
 os.environ.setdefault("AWS_DEFAULT_REGION", "ap-south-1")
 sys.path.insert(0, str(ROOT / "lambdas"))

@@ -25,6 +25,7 @@ out = json.loads(subprocess.check_output(["terraform", "output", "-json"], text=
 SM = out["state_machine_arn"]["value"]
 URL = out["web_url"]["value"]
 TABLES = {name.split("-", 1)[1]: name for name in out["tables"]["value"]}
+HER_KEY = out["her_key"]["value"]  # what her page carries; a cancel or a position needs it
 
 sfn = boto3.client("stepfunctions", region_name=REGION)
 ddb = boto3.client("dynamodb", region_name=REGION)
@@ -202,15 +203,19 @@ check("5 concurrent claims: exactly one winner, loser told who by name",
 
 # 6. cancel -> Cancelled state, false alarm to everyone reached
 wait_for_rows(d_id, 3)
-st, body = http("POST", "cancel", json.dumps({"incident_id": d_id}).encode())
+st0, _ = http("POST", "cancel", json.dumps({"incident_id": d_id, "key": "not-her-page"}).encode())  # a responder who knows the id
+d_still = incident(d_id)["status"]["S"]
+st, body = http("POST", "cancel", json.dumps({"incident_id": d_id, "key": HER_KEY}).encode())
 d_status = wait_done(d_arn)
 d_inc, d_states = incident(d_id), states(d_arn)
 d_bc = json.loads(d_inc.get("broadcast", {}).get("S", "{}"))
-check("6 cancel -> Cancelled, everyone reached told it was a false alarm",
-      st == 200 and json.loads(body)["status"] == "CANCELLED" and d_status == "SUCCEEDED" and "Cancelled" in d_states
+check("6 cancel -> Cancelled, everyone reached told it was a false alarm; only her page can",
+      st0 == 403 and d_still == "OPEN"
+      and st == 200 and json.loads(body)["status"] == "CANCELLED" and d_status == "SUCCEEDED" and "Cancelled" in d_states
       and d_inc["status"]["S"] == "CANCELLED" and d_bc.get("kind") == "false_alarm"
       and sorted(d_bc.get("told", [])) == reached(d_id) and len(d_bc.get("told", [])) >= 3,
-      f"states {d_states[-2:]}, status {d_inc['status']['S']}, broadcast {d_bc.get('kind')} told {d_bc.get('told')}")
+      f"without her key -> {st0}, still {d_still}; with it: states {d_states[-2:]}, status {d_inc['status']['S']}, "
+      f"broadcast {d_bc.get('kind')} told {d_bc.get('told')}")
 
 # 4. no claim -> NextTier -> everyone -> FinalFallback, all six told with fresh links
 a_status = wait_done(a_arn)
@@ -297,7 +302,7 @@ check("10 the release is logged with who and when",
 
 # 11. she may be fine after all: a cancel after someone claimed still tells everyone,
 #     though the machine finished with the claim
-st, body = http("POST", "cancel", json.dumps({"incident_id": b_id}).encode())
+st, body = http("POST", "cancel", json.dumps({"incident_id": b_id, "key": HER_KEY}).encode())
 b_inc = incident(b_id)
 b_bc = json.loads(b_inc.get("broadcast", {}).get("S", "{}"))
 b_page = http("GET", f"claim/{tok}")[1]
@@ -372,7 +377,7 @@ st2, p2 = http("POST", "trigger")
 first, second = json.loads(p1), json.loads(p2)
 pressed = first.get("incident_id", "")
 page_running = http("GET", "")[1]
-st3, p3 = http("POST", "cancel", json.dumps({"incident_id": pressed}).encode())
+st3, p3 = http("POST", "cancel", json.dumps({"incident_id": pressed, "key": HER_KEY}).encode())
 page_idle = http("GET", "")[1]
 check("15 a second press during an alert joins it, one incident, her page carries it",
       st1 == 200 and st2 == 200 and pressed and second.get("incident_id") == pressed and second.get("already") is True
@@ -383,15 +388,18 @@ check("15 a second press during an alert joins it, one incident, her page carrie
 
 # 16. where she is: a position her page sends lands on the live incident and on the page a
 #     responder opens; on a finished alert it is refused and nothing is written
-st1, p1 = http("POST", "location", json.dumps({"incident_id": a_id, "lat": 19.01765, "lon": 72.84268, "accuracy_m": 21}).encode())
+st0, _ = http("POST", "location", json.dumps({"incident_id": a_id, "key": "not-her-page", "lat": 18.0, "lon": 73.0, "accuracy_m": 5}).encode())
+a_before = incident(a_id).get("location")
+st1, p1 = http("POST", "location", json.dumps({"incident_id": a_id, "key": HER_KEY, "lat": 19.01765, "lon": 72.84268, "accuracy_m": 21}).encode())
 a_page = http("GET", f"claim/{plant_token(a_id, 'prakash')}")[1]
-st2, _ = http("POST", "location", json.dumps({"incident_id": b_id, "lat": 19.0, "lon": 72.8, "accuracy_m": 5}).encode())
+st2, _ = http("POST", "location", json.dumps({"incident_id": b_id, "key": HER_KEY, "lat": 19.0, "lon": 72.8, "accuracy_m": 5}).encode())
 a_loc, b_loc = incident(a_id).get("location", {}).get("M"), incident(b_id).get("location")
-check("16 her phone's position reaches the live alert and the responder's page, never a finished one",
-      st1 == 200 and a_loc and a_loc["lat"]["N"] == "19.01765" and "Her phone, at" in a_page
+check("16 her phone's position reaches the live alert and the responder's page, never a finished one, only from her page",
+      st0 == 403 and a_before is None
+      and st1 == 200 and a_loc and a_loc["lat"]["N"] == "19.01765" and "Her phone, at" in a_page
       and "maps.google.com/?q=19.01765,72.84268" in a_page and st2 == 409 and b_loc is None,
-      f"live alert -> {st1}, row lat {a_loc and a_loc['lat']['N']}, on the page: {'Her phone, at' in a_page}; "
-      f"finished alert -> {st2}, written: {b_loc is not None}")
+      f"without her key -> {st0}, written: {a_before is not None}; live alert -> {st1}, row lat {a_loc and a_loc['lat']['N']}, "
+      f"on the page: {'Her phone, at' in a_page}; finished alert -> {st2}, written: {b_loc is not None}")
 
 # 17. "I can't go after all": the one who claimed steps back. The alert reopens with the step-back
 #     on its row, everyone else contacted is told with a fresh link, her page hears who stepped back

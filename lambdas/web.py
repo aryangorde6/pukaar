@@ -2,12 +2,20 @@
 
     GET  /                the help button (the subject's page)
     POST /trigger         press it: start an escalation, answer with its id
+    POST /location        where her phone is, after a press - her page's key required
+    POST /cancel          she is OK: mark it cancelled; everyone is told - her page's key required
+    GET  /status/{id}     what her screen shows: open, who is coming, cancelled
     GET  /claim/{token}   the responder's page: who, where, and whether anyone has gone
     POST /claim/{token}   "I'm going now" - one conditional write decides the race
-    POST /cancel          she is OK: mark it cancelled; the machine tells everyone
-    GET  /status/{id}     what her screen shows: open, who is coming, cancelled
+    POST /release/{token} "I can't go after all" - the one who claimed steps back
+    GET  /checkin/{token} the weekly check-in's page; POST counts the answer
+    GET  /leave/{token}   asks; POST /leave/{token} takes the person off her list
+    GET  /incident/{id}   what happened, in order, from the rows
     GET  /manifest.webmanifest, /icon-192.png, /icon-512.png
                           so the button installs on her home screen as "Pukaar"
+
+Her page is the only thing that carries HER_KEY; a cancel or a position without it is
+refused, so a responder's link or a timeline id can read the alert but not end or move it.
 
 GET never writes. Mail clients and link scanners fetch every link in an email;
 if a GET could claim, a corporate proxy would be on its way to Sunita instead
@@ -16,6 +24,7 @@ of Ravi.
 
 import base64
 import hashlib
+import hmac
 import json
 import os
 import time
@@ -42,6 +51,7 @@ RESPONSE_STATS = os.environ["RESPONSE_STATS_TABLE"]
 STATE_MACHINE_ARN = os.environ["STATE_MACHINE_ARN"]
 BROADCAST_FN = os.environ["BROADCAST_FN"]
 SUBJECT_ID = os.environ["SUBJECT_ID"]
+HER_KEY = os.environ["HER_KEY"]
 WAIT_S = int(os.environ.get("WAIT_S", "60"))
 MAX_TIER = int(os.environ.get("MAX_TIER", "3"))
 IST = timezone(timedelta(hours=5, minutes=30))
@@ -91,6 +101,8 @@ def location(event):
         assert -90 <= lat <= 90 and -180 <= lon <= 180
     except (ValueError, KeyError, TypeError, AssertionError):
         return jsonr(400, {"error": "lat, lon, incident_id"})
+    if not hers(body):
+        return jsonr(403, {"error": "only her page can say where she is"})
     now = int(time.time())
     try:
         ddb.update_item(TableName=INCIDENTS, Key={"incident_id": {"S": incident_id}},
@@ -113,9 +125,12 @@ def cancel(event):
     body = event.get("body") or "{}"
     if event.get("isBase64Encoded"):
         body = base64.b64decode(body).decode()
-    incident_id = json.loads(body).get("incident_id", "")
+    body = json.loads(body)
+    incident_id = body.get("incident_id", "")
     if not incident_id:
         return jsonr(400, {"error": "incident_id required"})
+    if not hers(body):
+        return jsonr(403, {"error": "only her page can cancel"})
     now = int(time.time())
     try:
         old = ddb.update_item(
@@ -140,6 +155,11 @@ def cancel(event):
             wake(old["Attributes"], "cancelled")
     print(json.dumps({"component": "web", "event": "cancel", "incident_id": incident_id}))
     return status(incident_id)
+
+
+def hers(body):
+    """The request came from her page: it carries the key rendered into that page alone."""
+    return hmac.compare_digest(str(body.get("key", "")), HER_KEY)
 
 
 def wake(old_row, why):
@@ -188,7 +208,7 @@ def trigger_page():
         told = "No one has been added yet, so this button cannot reach anyone."
         disabled = "disabled"
     running = open_incident()
-    return PAGE.substitute(told=told, disabled=disabled, names_json=json.dumps(names),
+    return PAGE.substitute(told=told, disabled=disabled, names_json=json.dumps(names), key_json=json.dumps(HER_KEY),
                            running_json=json.dumps(running["incident_id"]["S"] if running else None),
                            strings_json=json.dumps(STRINGS, ensure_ascii=False))
 
@@ -913,6 +933,7 @@ PAGE = Template("""<!doctype html>
   var names = $names_json;
   var strings = $strings_json;
   var running = $running_json;  // an alert already open for her, if the app was reopened during one
+  var key = $key_json;  // only this page carries it: a cancel or a position without it is refused
   var incident = null, poll = null, lang = "en", claimer = "", hasNotes = false, back = "", shown = null;
   var esc = function (s) { return String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;"); };
   var t = function (key) { return strings[lang][key] || strings.en[key]; };
@@ -1004,7 +1025,7 @@ PAGE = Template("""<!doctype html>
     btn.disabled = true; btn.textContent = t("cancelling");
     var restore = function () { btn.disabled = false; btn.textContent = label; };
     fetch("/cancel", { method: "POST", headers: { "content-type": "application/json" },
-      body: JSON.stringify({ incident_id: incident }) })
+      body: JSON.stringify({ incident_id: incident, key: key }) })
       .then(function (r) { return r.json(); })
       .then(function (s) { if (s.status === "CANCELLED") { show("cancelled"); stopPoll(); } else { check(); } restore(); })
       .catch(restore);
@@ -1016,7 +1037,7 @@ PAGE = Template("""<!doctype html>
     try {
       navigator.geolocation.getCurrentPosition(function (p) {
         fetch("/location", { method: "POST", headers: { "content-type": "application/json" },
-          body: JSON.stringify({ incident_id: id, lat: p.coords.latitude, lon: p.coords.longitude,
+          body: JSON.stringify({ incident_id: id, key: key, lat: p.coords.latitude, lon: p.coords.longitude,
                                  accuracy_m: Math.round(p.coords.accuracy) }) }).catch(function () {});
       }, function () {}, { enableHighAccuracy: true, timeout: 15000, maximumAge: 60000 });
     } catch (e) {}
