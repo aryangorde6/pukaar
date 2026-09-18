@@ -540,7 +540,7 @@ def incident_page(incident_id):
         name=escape(name), pressed_at=fmt_time(incident["started_at"]["N"]),
         day=datetime.fromtimestamp(n(incident, "started_at"), IST).strftime("%-d %B"),
         card_class=card[0], card_h1=card[1], card_p=card[2], rows=rows_html,
-        refresh='<meta http-equiv="refresh" content="5">' if status in ("OPEN", "FALLBACK") else ""))
+        open="1" if status in ("OPEN", "FALLBACK") else "0"))
 
 
 def fmt_clock(epoch):
@@ -883,7 +883,7 @@ PAGE = Template("""<!doctype html>
 </head>
 <body>
 <div class="sr-only" aria-live="assertive" id="announce"></div>
-<p class="langbar"><button class="btn-lang" id="lang" lang="mr">मराठी</button></p>
+<header><p class="langbar"><button class="btn-lang" id="lang" lang="mr">मराठी</button></p></header>
 
 <main id="idle">
   <h1 data-i18n="idle_h1">I NEED HELP</h1>
@@ -926,7 +926,7 @@ PAGE = Template("""<!doctype html>
   <p style="margin-top: var(--space-6)"><strong data-i18n="call_112">Or call 112 now.</strong></p>
 </main>
 
-<p class="foot"><span data-i18n="foot">Not working? Call</span> <a href="tel:112">112</a></p>
+<footer><p class="foot"><span data-i18n="foot">Not working? Call</span> <a href="tel:112">112</a></p></footer>
 
 <script>
 (function () {
@@ -1089,13 +1089,15 @@ PAGE = Template("""<!doctype html>
 </html>
 """)
 
-def _page(title, body, head=""):
+def _page(title, body):
     return ("""<!doctype html><html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1"><meta name="robots" content="noindex">
-<meta name="color-scheme" content="only light">""" + head + """
+<meta name="color-scheme" content="only light">
 <title>""" + title + """</title><style>""" + STYLE + """</style></head><body>
+<main>
 """ + body + """
-<p class="foot">Pukaar · Ambulance: <a href="tel:112">112</a></p>
+</main>
+<footer><p class="foot">Pukaar · Ambulance: <a href="tel:112">112</a></p></footer>
 </body></html>""")
 
 
@@ -1159,9 +1161,35 @@ CLAIM_OVER = Template(_page("This alert is over", """
 INCIDENT_PAGE = Template(_page("What happened — $name, $pressed_at", """
 <h1>$name pressed her help button at $pressed_at</h1>
 <p class="lead">$day. Every line below is a row this system wrote, in the order it wrote them.</p>
-<div class="card $card_class"><h1>$card_h1</h1><p>$card_p</p></div>
-<ol class="timeline">$rows</ol>
-""", head="$refresh"))
+<div class="card $card_class" id="state" data-open="$open" aria-live="polite"><h1>$card_h1</h1><p>$card_p</p></div>
+<ol class="timeline" aria-live="polite">$rows</ol>
+<script>
+// While the alert is open, fetch this page again every 5 s and add the new lines in place - not a
+// reload, which would throw a screen reader back to the top each time (and axe calls meta-refresh critical).
+// One more look after it settles: the row closes on the claim or the cancel, and the line that says
+// everyone was told is written a couple of seconds later.
+(function () {
+  var state = document.getElementById("state"), list = document.querySelector(".timeline"), lastLook = false;
+  function tick() {
+    fetch(location.href, { cache: "no-store" }).then(function (r) { return r.text(); }).then(function (t) {
+      var doc = new DOMParser().parseFromString(t, "text/html");
+      var freshState = doc.getElementById("state"), fresh = doc.querySelector(".timeline");
+      if (!freshState || !fresh) return;
+      var have = list.children.length, incoming = fresh.children;
+      var samePrefix = have <= incoming.length;
+      for (var i = 0; samePrefix && i < have; i++) samePrefix = list.children[i].innerHTML === incoming[i].innerHTML;
+      if (samePrefix) { for (var j = have; j < incoming.length; j++) list.appendChild(incoming[j].cloneNode(true)); }
+      else list.innerHTML = fresh.innerHTML;
+      if (state.innerHTML !== freshState.innerHTML) { state.className = freshState.className; state.innerHTML = freshState.innerHTML; }
+      state.dataset.open = freshState.dataset.open;
+      if (freshState.dataset.open === "1") setTimeout(tick, 5000);
+      else if (!lastLook) { lastLook = true; setTimeout(tick, 5000); }
+    }).catch(function () { setTimeout(tick, 5000); });
+  }
+  if (state.dataset.open === "1") setTimeout(tick, 5000);
+})();
+</script>
+"""))
 
 CHECKIN_ASK = Template(_page("Check-in — not an emergency", """
 <p class="banner banner-calm">NOT AN EMERGENCY</p>
@@ -1210,6 +1238,6 @@ BAD_LINK = _page("This link isn’t valid", """
 NOT_FOUND = """<!doctype html><html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1"><meta name="color-scheme" content="only light"><title>Not found</title>
 <style>""" + STYLE + """</style></head><body>
-<h1>That page does not exist</h1>
-<p class="foot">Not working? Call <a href="tel:112">112</a></p>
+<main><h1>That page does not exist</h1></main>
+<footer><p class="foot">Not working? Call <a href="tel:112">112</a></p></footer>
 </body></html>"""

@@ -80,7 +80,7 @@ Pukaar replaces the sequence with a fan-out. One press pages the three people mo
 5. **First person, in the words the person would say.** *I need help. I'm going now. I can't go after all. Cancel — I'm OK. I'd be reachable now.*
 6. **Nothing to learn.** No icons but a tick and a warning sign; no menus, no settings, no sign-in. The one question her page ever asks — may helpers see where you are — is asked once, and the answer sticks.
 7. **Her language, and her phone's voice.** The pill switches between English and hers and the phone remembers; every state after the press is read aloud where the phone has a voice for her language, so she does not have to read at all.
-8. **Targets: 64 px for every button, 96 px for *I'm going now*, 48 px for the pill and every 112 link.** A 4 px focus ring for anyone on a keyboard.
+8. **Targets: 64 px for every button, 96 px for *I'm going now*, 48 px for the pill and every 112 link.** A 4 px focus ring for anyone on a keyboard; header, main and footer landmarks on every page; the timeline adds its new lines in place while the alert is open instead of reloading, so a screen reader is not thrown back to the top every five seconds. axe-core 4.10.2 with every rule set it has, best-practice included: no violations on her page in all six states, the alert, *You're going*, *already on the way*, *cancelled*, the check-in, the leave page, the timeline and the 404 (19 Sep).
 9. **112 at the foot of every page.** The button is not a promise, and the page says so.
 10. **One column, 720 px at most, light only.** The same page on a phone, a laptop and a shared screen, and the same at three in the morning.
 
