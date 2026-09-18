@@ -32,24 +32,57 @@ Pukaar replaces the sequence with a fan-out. One press pages the three people mo
 8. **Where she is.** She may not be at home. Her page asks once, at setup, whether helpers may see where she is (a small line under the button, gone once answered either way); after that every press sends her phone's position — after the page is already paged, so the alert never waits on GPS — and the page a responder opens says *Her phone, at 2:41 pm: within 20 m of this spot*, with a maps link, beside her home address. It is written only on a live alert, only with her page's key (`POST /location`, check 16), and nothing else trusts it.
 9. **Afterwards, what happened, in order** (`GET /incident/<id>`, linked from every settled page a responder sees and from the two messages that ask nothing of anyone — *Ravi is going*, *False alarm*): the press, each circle's sends with one timestamp, who answered, who went, who opened her notes, the ending — every line a row this system wrote, nothing inferred, refreshing itself while the alert is open. For her family, and for anyone who was paged and wants to know.
 
+<table>
+<tr>
+<td width="33%" align="center"><img src="docs/01-her-button.png" alt="Her screen: one button, I NEED HELP, and who will be told"></td>
+<td width="33%" align="center"><img src="docs/06-her-button-marathi.png" alt="Her screen in Marathi: मला मदत हवी आहे, and who will be told"></td>
+<td width="33%" align="center"><img src="docs/02-the-alert.png" alt="The alert a contact opens: EMERGENCY, her name, address, Open in maps, where her phone is, I'm going now"></td>
+</tr>
+<tr>
+<td align="center"><sub><b>Her screen.</b> One button, and who will be told is already on it.</sub></td>
+<td align="center"><sub><b>The same screen in Marathi.</b> One pill; English a tap away.</sub></td>
+<td align="center"><sub><b>What a contact opens.</b> Her name, her address, where her phone is, <i>I'm going now</i>.</sub></td>
+</tr>
+<tr>
+<td width="33%" align="center"><img src="docs/03-youre-going.png" alt="After claiming: You're going, the address, her sealed medical notes, and I can't go after all"></td>
+<td width="33%" align="center"><img src="docs/04-already-on-the-way.png" alt="The loser of the race: Ravi is already on the way"></td>
+<td width="33%" align="center"><img src="docs/07-cant-come.png" alt="Her screen after the one who claimed stepped back: Ravi can't come after all, and who has been told now"></td>
+</tr>
+<tr>
+<td align="center"><sub><b>After the tap.</b> <i>You're going</i>; her sealed notes, opened for him alone; <i>I can't go after all</i>.</sub></td>
+<td align="center"><sub><b>The other two.</b> <i>Ravi is already on the way</i> — by name, from the row.</sub></td>
+<td align="center"><sub><b>Her screen when he steps back.</b> Who is told now.</sub></td>
+</tr>
+<tr>
+<td width="33%" align="center"><img src="docs/10-no-one.png" alt="Her screen when everyone on her list has been told and nobody has answered: No one has answered yet, and a CALL 112 NOW button"></td>
+<td width="33%" align="center"><img src="docs/05-cancelled.png" alt="After she cancels: Sunita cancelled this alert"></td>
+<td width="33%" align="center"><img src="docs/09-checkin.png" alt="The weekly check-in a contact opens: NOT AN EMERGENCY, Sunita is fine, I'd be reachable now"></td>
+</tr>
+<tr>
+<td align="center"><sub><b>Everyone told, nobody answered.</b> The button becomes <i>Call 112 now</i>.</sub></td>
+<td align="center"><sub><b>After she cancels.</b> What a contact sees: <i>Sunita cancelled this alert</i>.</sub></td>
+<td align="center"><sub><b>The weekly check-in.</b> <i>Not an emergency</i>; one tap teaches the ranking who answers.</sub></td>
+</tr>
+</table>
 <p align="center">
-  <img src="docs/01-her-button.png" width="19%" alt="Her screen: one button, I NEED HELP, and who will be told">
-  <img src="docs/02-the-alert.png" width="19%" alt="The alert a contact opens: EMERGENCY, her name, address, Open in maps, I'm going now">
-  <img src="docs/03-youre-going.png" width="19%" alt="After claiming: You're going, the address, and her sealed medical notes">
-  <img src="docs/04-already-on-the-way.png" width="19%" alt="The loser of the race: Ravi is already on the way">
-  <img src="docs/05-cancelled.png" width="19%" alt="After she cancels: Sunita cancelled this alert">
-</p>
-<p align="center">
-  <img src="docs/06-her-button-marathi.png" width="19%" alt="Her screen in Marathi: मला मदत हवी आहे, and who will be told">
-  <img src="docs/07-cant-come.png" width="19%" alt="Her screen after the one who claimed stepped back: Ravi can't come after all, and who has been told now">
-  <img src="docs/10-no-one.png" width="19%" alt="Her screen when everyone on her list has been told and nobody has answered: No one has answered yet, and a CALL 112 NOW button">
-  <img src="docs/09-checkin.png" width="19%" alt="The weekly check-in a contact opens: NOT AN EMERGENCY, Sunita is fine, I'd be reachable now">
-</p>
-<p align="center">
-  <img src="docs/08-timeline.png" width="38%" alt="The timeline of one alert: the press, three told at once, Ravi is going, notes opened, Ravi can't go after all, the next circle paged, cancelled, everyone told">
+  <img src="docs/08-timeline.png" width="60%" alt="The timeline of one alert: the press, three told at once, Ravi is going, notes opened, Ravi can't go after all, the next circle paged, cancelled, everyone told"><br>
+  <sub><b>One alert, in order.</b> Every line a row this system wrote, nothing inferred.</sub>
 </p>
 
-*Top: her button · the alert (with where her phone is) · you're going (the notes, and "I can't go after all") · already on the way · cancelled. Middle: her button in Marathi · her screen after Ravi stepped back · her screen when the whole list has been told and no one has answered · the weekly check-in. Bottom: one alert's timeline, every line a row. All from real alerts on the live stack, 18 Sep. Every text colour on these screens is at least 7:1 against its background, the AAA line; the button is 240 px tall, every other target at least 48 px.*
+*All from real alerts on the live stack, 18 Sep.*
+
+### Design — the rules the screens follow
+
+1. **One button, 240 px tall, its words 44 px capitals.** Her thumb finds it without aiming. The only other controls she ever sees are Cancel, the language pill, 112 and — once — the location question.
+2. **20 px body text, 40 px headings, line height 1.6** — set for eyes in their seventies. The timeline's rows are 24 px; nothing on any page is smaller than 16 px.
+3. **Every colour pair passes 7:1** — the AAA line, not AA's 4.5; the lowest is 7.3:1 (the caution text on its card), white on the red button is 7.8:1. Red means emergency, green means someone is coming, amber means it was called off — the same three meanings on every page.
+4. **Every state says who.** *Vaishali, Ravi and Anil will be told* before the press; *Ravi is coming* after it; *Ravi can't come after all — Meena, Prakash and Sunil have been told*. Never "your contacts", never a count alone.
+5. **First person, in the words the person would say.** *I need help. I'm going now. I can't go after all. Cancel — I'm OK. I'd be reachable now.*
+6. **Nothing to learn.** No icons but a tick and a warning sign; no menus, no settings, no sign-in. The one question her page ever asks — may helpers see where you are — is asked once, and the answer sticks.
+7. **Her language, and her phone's voice.** The pill switches between English and hers and the phone remembers; every state after the press is read aloud where the phone has a voice for her language, so she does not have to read at all.
+8. **Targets: 64 px for every button, 96 px for *I'm going now*, 48 px for the pill and every 112 link.** A 4 px focus ring for anyone on a keyboard.
+9. **112 at the foot of every page.** The button is not a promise, and the page says so.
+10. **One column, 720 px at most, light only.** The same page on a phone, a laptop and a shared screen, and the same at three in the morning.
 
 ### Correctness properties, stated
 
