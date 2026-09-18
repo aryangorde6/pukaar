@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Eleven checks against the live stack. Each asserts on rows and execution history,
+"""Twelve checks against the live stack. Each asserts on rows and execution history,
 never on a status code alone - SUCCEEDED with nothing in the tables is a failure.
 
 Every check requires something positive to exist. A check that would pass against
@@ -304,6 +304,18 @@ check("11 cancel after a claim: everyone reached told, the record closed",
       and len(b_bc.get("told", [])) >= 3 and "cancelled this alert" in b_page and first_line not in b_page,
       f"status {b_inc['status']['S']}, broadcast {b_bc.get('kind')} told {b_bc.get('told')}; claimer's link now: "
       f"{'cancelled' if 'cancelled this alert' in b_page else 'not cancelled'}, record shown: {first_line in b_page}")
+
+# 12. the second channel: every page row's channel matches its contact - "email+telegram" with a
+#     Telegram message id for a contact whose chat id is configured, "email" alone for the rest
+chat_ids = out.get("telegram_chat_ids", {}).get("value", {}) or {}
+page_rows = [r for r in rows(a_id) if r["tier"]["N"] not in ("0", "99")]
+def channel_ok(r):
+    want = "email+telegram" if r["contact_id"]["S"] in chat_ids else "email"
+    return r.get("channel", {}).get("S") == want and (want == "email") != ("telegram_message_id" in r)
+check("12 the second channel: every page row's channel matches its contact",
+      len(page_rows) >= 6 and all(channel_ok(r) for r in page_rows),
+      f"{len(page_rows)} page rows; on Telegram: {sorted(r['contact_id']['S'] for r in page_rows if 'telegram_message_id' in r)}; "
+      f"configured: {sorted(chat_ids)}")
 
 print()
 passed = sum(1 for _, ok in results if ok)

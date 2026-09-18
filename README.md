@@ -4,9 +4,9 @@
 
 - **The one design decision:** the escalation is a Step Functions state machine, not a loop in a server. A parallel `Map` pages a whole circle at once, a conditional DynamoDB write decides the race between answerers, and the machine *waits for a task token* — a claim or a cancel wakes it in about a second instead of at the next timer.
 - **What an incident costs:** about **$0.0013 (₹0.12)** when the son answers from the first circle, **$0.0039 (₹0.34)** when nobody answers and it widens to everyone. Idle is a fraction of a cent per person per month plus one $1/month key; a thousand people with one incident each come to about $6/month. Numbers from [`cost.py`](cost.py), list prices, counted off real executions.
-- **Live:** https://jseoe3z3uew46fyd6zbceyry6u0ebdgt.lambda-url.ap-south-1.on.aws/ — pressing it pages six test mailboxes, all mine.
+- **Live:** https://jseoe3z3uew46fyd6zbceyry6u0ebdgt.lambda-url.ap-south-1.on.aws/ — pressing it pages six test mailboxes and one Telegram, all mine.
 - **Demo video:** *added at submission.*
-- **Proof it works:** [`verify.sh`](verify.sh) runs eleven checks against the live stack, each asserting on rows and execution history, never on a status code. Last run 11/11. Every break during the build is in [`LEARNING-LOG.md`](LEARNING-LOG.md) with the commit that fixed it.
+- **Proof it works:** [`verify.sh`](verify.sh) runs twelve checks against the live stack, each asserting on rows and execution history, never on a status code. Last run 12/12. Every break during the build is in [`LEARNING-LOG.md`](LEARNING-LOG.md) with the commit that fixed it.
 
 Built solo, in the open, during Bharat Builds Tour — First Commit, 17–20 September 2026, ap-south-1.
 
@@ -24,7 +24,7 @@ Pukaar replaces the sequence with a fan-out. One press pages the three people mo
 
 1. **Her screen** (`GET /`) is one button. It already says who will be told — *"Vaishali, Ravi and Anil will be told straight away"* — read from the same ranking the machine will use. It installs on her home screen as *Pukaar* (`/manifest.webmanifest`, two PNG icons served by the same function), so the button is an icon, not an address to type. It speaks her language: `?lang=mr` once, at setup, and every word on her screen is Marathi — *मला मदत हवी आहे*; the phone remembers, and the one pill on the page switches between English and her language, never a menu. Ten languages besides English: Marathi and Hindi were read by someone who speaks them; Gujarati, Tamil, Telugu, Kannada, Bengali, Malayalam, Punjabi and Odia are drafts checked by machine translation only, waiting for a reader — which is one reason English stays one tap away on every screen. A language is twenty-two strings in [`web.py`](lambdas/web.py). Only her page is translated; the people paged are younger, and their pages and emails stay English.
 2. **The press** (`POST /trigger`) starts one execution of `pukaar-escalation`, named after the incident, so a retried request cannot start the same incident twice; the button disables itself on press.
-3. **The circle is paged at once.** `SelectTier` ranks everyone on her list and takes the top three not yet reached; a parallel `Map` sends each of them an email with a one-time link. In the execution history the three sends carry the same timestamp (`13:22:59.690` on the first live run).
+3. **The circle is paged at once.** `SelectTier` ranks everyone on her list and takes the top three not yet reached; a parallel `Map` sends each of them an email with a one-time link — and the same link on Telegram, as a button, to anyone who has started her bot (the son, in the demo). In the execution history the three sends carry the same timestamp (`13:22:59.690` on the first live run).
 4. **The machine waits for a task token**, parked on the incident row. If nobody answers in `wait_s` seconds it wakes by timeout, checks the row, and widens to the next three. At the last circle everyone is paged, then a final *no one has reached her* email goes to the whole list.
 5. **Someone taps "I'm going now."** One conditional `UpdateItem` — `status IN (OPEN, FALLBACK)` — decides the race; the loser's page says *"Ravi is already on the way"* by name, read from the row after the write. The winning write returns the parked token, `SendTaskSuccess` wakes the machine, and everyone reached is told who is coming. Measured: cancel → *Cancelled* in **1.0 s**, claim → everyone told in **2.8 s** including the emails.
 6. **The winner's page opens her sealed medical notes** — blood group, medication, allergy, a daughter's number — decrypted from a KMS customer-managed key for that one person, and her screen says *"Ravi has your medical notes."*
@@ -82,6 +82,7 @@ flowchart LR
 - **Compute:** seven Python 3.13 Lambdas on arm64, 128 MB, one zip. Six run inside the machine under role `pukaar-lambda` (DynamoDB, SES, one metric namespace — **no KMS**); `web` runs under `pukaar-web` (DynamoDB, start/wake the machine, invoke `broadcast`, `kms:Decrypt` — **no SES**).
 - **Data:** five on-demand DynamoDB tables. `notifications` stores only the **SHA-256 of the link token** (GSI `token_hash-index`); the plaintext exists in the email alone. `subjects.record` is a Binary ciphertext.
 - **Edge:** one Lambda Function URL, six routes, no API Gateway, no login (the button is hers; the links are one-time, per incident, per person).
+- **Channels:** email through SES, always; Telegram through the Bot API for a contact row that carries a chat id — the same message and the same link, so a person counts as reached if either channel took it. The bot token is a sensitive Terraform variable in `terraform.tfvars` (gitignored), passed only to the paging functions; the chat ids come from the same file through `seed.sh`, never from the repo.
 - **Infra:** Terraform, AWS provider 6.x, log retention 7 days, everything in [`main.tf`](main.tf).
 
 ## Availability ranking — who is in the first circle
@@ -127,7 +128,7 @@ ap-south-1 list prices from the AWS Price List API on 17 Sep 2026, free tiers ig
 Idle, per subject per month: $0.00364. Fixed, whole system: one KMS key, $1.00/month.
 A thousand people, one incident each a month: about $6/month (₹525).
 
-Decisions made for cost: **Standard, not Express** workflows — a parked `waitForTaskToken` costs nothing per second, and the wait is the whole product; **a Function URL, not API Gateway** — six routes, no auth layer to pay for; **arm64** Lambdas at 128 MB; **DynamoDB on-demand** — near-zero traffic between incidents; **no VPC**, so no NAT Gateway; **log retention 7 days**; **email, not SMS** — SES is about ₹0.013 a message against ₹0.20+ for Indian SMS, and sender-ID SMS needs a registration this weekend does not have. The largest line in the whole bill is the $1 key.
+Decisions made for cost: **Standard, not Express** workflows — a parked `waitForTaskToken` costs nothing per second, and the wait is the whole product; **a Function URL, not API Gateway** — six routes, no auth layer to pay for; **arm64** Lambdas at 128 MB; **DynamoDB on-demand** — near-zero traffic between incidents; **no VPC**, so no NAT Gateway; **log retention 7 days**; **email, not SMS** — SES is about ₹0.013 a message against ₹0.20+ for Indian SMS, and sender-ID SMS needs a registration this weekend does not have; Telegram costs nothing. The largest line in the whole bill is the $1 key.
 
 ## What I learned
 
@@ -148,7 +149,7 @@ Also new to me this week, without a break to log: a KMS encryption context as th
 
 ## What it does not do
 
-- **No SMS or calls.** Email only, because SES works today and Indian sender-ID SMS needs a registration. An older person's helpers mostly have Gmail on their phones; this is a channel choice, not a claim that email is enough.
+- **No SMS or calls.** Email, and Telegram for whoever on her list has started her bot; no SMS, because Indian sender-ID SMS needs a registration a weekend does not have, and no calls. A Telegram bot cannot message someone first, so the son has to tap *Start* once at setup — that is the consent step this channel gets for free.
 - **Dispatch, not delivery.** SES accepts the message; where Gmail files it is unobservable from this side and drifts. Every check here asserts on the send, the row and the message id.
 - **The histories in the demo are seeded.** `seed.sh` writes the 2 pm records that make the ranking visible and, on re-run, deletes everything counted since; between runs the counters are real (a real claim at 5:57 pm added `responses 1, 46 000 ms` to Ravi's `17#weekday` row, until the next reseed). A low-stakes periodic test ping — "tap to confirm you'd be reachable" — would grow real history without waiting for emergencies; it is the stated next step, not built.
 - **Consent, caps and removal for contacts are designed, not built.** Nothing can add a stranger's address: subjects and contacts enter through a script the operator runs. There is no self-serve form, precisely because an open form here is an open relay.
@@ -165,11 +166,11 @@ Commercial systems converge on this shape — [Alerto](https://alertotech.com/),
 ```bash
 terraform init && terraform apply          # AWS_PROFILE and region in variables.tf
 ./seed.sh                                  # Sunita, her six contacts, their histories, her sealed notes
-./verify.sh                                # eleven live checks; reseeds before and after
+./verify.sh                                # twelve live checks; reseeds before and after
 .venv/bin/pytest -q                        # ranking, the learning log, the cost numbers
 ```
 
-`variables.tf` holds the sender identity (SES production access on a verified domain is assumed), `wait_s` (60 in production; every test above passes 3–25) and `max_tier`.
+`variables.tf` holds the sender identity (SES production access on a verified domain is assumed), `wait_s` (60 in production; every test above passes 3–25) and `max_tier`. Telegram is optional: `terraform.tfvars` (gitignored) with `telegram_bot_token` from @BotFather and `telegram_chat_ids = { ravi = "…" }`; without it, email alone.
 
 ---
 

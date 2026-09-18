@@ -90,8 +90,13 @@ def handler(event, context):
             emailed = True
         except ClientError as e:
             emailed, reason = False, e.response["Error"]["Code"]
-        on_telegram = bool(c["telegram"] and telegram.send(c["telegram"], *render_telegram(kind, this_ctx)))
-        if emailed or on_telegram:
+        tg_id = telegram.send(c["telegram"], *render_telegram(kind, this_ctx)) if c["telegram"] else None
+        if tg_id and kind == "no_one_reached":
+            ddb.update_item(TableName=NOTIFICATIONS,
+                            Key={"incident_id": {"S": incident_id}, "contact_tier": {"S": f"{c['contact_id']}#F"}},
+                            UpdateExpression="SET channel = :c, telegram_message_id = :g",
+                            ExpressionAttributeValues={":c": {"S": "email+telegram" if emailed else "telegram"}, ":g": {"S": tg_id}})
+        if emailed or tg_id:
             told.append(c["contact_id"])
         else:
             failed.append({"contact_id": c["contact_id"], "reason": reason})
