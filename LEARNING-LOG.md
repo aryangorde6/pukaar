@@ -221,17 +221,48 @@ Evidence:         Same alert shape after the fix (`8ed1e8d50174`): *Anil, Ravi a
                   'Vaishali']". The property in the README reads *never says less than the row knows*; it
                   now says *never more, either*.
 
+## 2026-09-19 20:39 IST — a default set on the sender, no code changed, and no page could be sent
+Tried:            Making a bounced page reach the operator without touching a Lambda: an SES configuration
+                  set with an SNS event destination, made the *default* of the sending identity
+                  `aryangorde.com`, so every page carries it and nothing in `notify.py` changes. Applied
+                  with the other rails (point-in-time recovery, deletion protection, the hour's cap, the
+                  alarm on `pukaar-web`), then `./verify.sh`.  
+Broke:            Check 1 failed at once: *fan-out writes three delivered rows: 1 tier-1 rows delivered,
+                  message ids ['']*, and the run crashed on the empty id. `pukaar-notify`'s log, one line
+                  per contact: `AccessDeniedException: User '...assumed-role/pukaar-lambda/pukaar-notify'
+                  is not authorized to perform 'ses:SendEmail' on resource
+                  'arn:aws:ses:ap-south-1:787565887708:configuration-set/pukaar'`. The same apply had also
+                  stopped twice on its way: *Every policy statement must have a unique ID* (three
+                  statements on the topic policy, no `Sid`s) and the SES destination refusing to be created
+                  until the topic's policy let SES publish, which Terraform was setting after it.  
+Wrong assumption: That a permission written for "the identity" covers whatever the identity does. It
+                  covered the identity. A default configuration set is a second resource that rides on
+                  every send from it, and SES authorises both, so an account-level default reached into
+                  eight functions without any of them changing and the policy written for the old shape
+                  denied all of them. "No code changed" is not "nothing changed".  
+Fix:              be18209 — the paging role's `ses:SendEmail` statement names the configuration set's ARN
+                  beside the identity's; `Sid`s on the three statements; `depends_on` from the SES
+                  destination to the topic policy. And check 20, which sends one page to SES's bounce
+                  simulator *without* naming a set and asserts the bounce is counted and published, so
+                  the default is proven on every run, not assumed.  
+Evidence:         Before: 18/20 with the fix eight seconds old (IAM was still propagating: a broadcast at
+                  20:43 reached two of three, `"failed": [{"contact_id": "anil", "reason":
+                  "AccessDeniedException"}]`). After: **20/20**, `v-204528-*`, check 20 *SES Bounce 1,
+                  topic published 4 (was 1)*; `simulate-principal-policy` for `pukaar-lambda` on the
+                  configuration-set ARN → allowed.
+
 ---
 
-## What the nine have in common (written 19 Sep 12:35 IST after the eighth entry; the ninth added 12:55)
+## What the ten have in common (written 19 Sep 12:35 IST after the eighth entry; the ninth added 12:55, the tenth 20:50)
 
-Six of the nine were a word I trusted: `NONE` "means public", a poll after a Wait is
+Seven of the ten were a word I trusted: `NONE` "means public", a poll after a Wait is
 "immediate", a meta refresh is "the page refreshing itself", an id that is safe to *read*
-by is "safe to act by", reseeding *before* a run "protects the button", the people "told" are the people a press "would tell". In each case the
+by is "safe to act by", reseeding *before* a run "protects the button", the people "told" are the people a press "would tell", a permission on "the identity"
+covers what the identity does. In each case the
 word described what I wanted and not what the system does, and the fix began with one
 command that showed the difference (`curl` against the URL, the cancel's timestamp beside
 the tier boundary, a marker on `window`, the timeline link in a stranger's inbox, the
-ranking after a run, three rows beside four names). Two were about the checks themselves: a test that was green on an
+ranking after a run, three rows beside four names, one denied send in a Lambda's log). Two were about the checks themselves: a test that was green on an
 empty log, and a reseed that protected the checks and not the thing they were checking,
 which is where the rule at the top of `verify.py` comes from: a check that would pass
 against nothing is not a check. One was statistics: a single ignored page is not
@@ -240,4 +271,4 @@ evidence, and a ranking needs a prior before it needs a cliff.
 What I would carry to the next build: a word like *public*, *immediate* or *safe* does
 not go into the README until a command has shown it; the check is written before the
 feature when the feature is a promise about behaviour; and the tools that found three of
-the nine (axe, Lighthouse, and a screenshot taken the way she would open the page) run on the first day, not the last night.
+the ten (axe, Lighthouse, and a screenshot taken the way she would open the page) run on the first day, not the last night. The tenth is the case for the live checks: a change that touched no code broke the one path that matters, and check 1 said so inside a minute.
