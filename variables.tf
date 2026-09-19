@@ -60,3 +60,9 @@ variable "checkin_schedule" {
   type        = string
   default     = "cron(0 18 ? * WED *)"
 }
+
+variable "operator_email" {
+  description = "Who is emailed when an escalation fails. Set in terraform.tfvars; empty means nobody is."
+  type        = string
+  default     = ""
+}

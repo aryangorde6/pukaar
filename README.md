@@ -6,7 +6,7 @@
 - **What an incident costs:** about **$0.0014 (₹0.12)** when the son answers from the first circle, **$0.0039 (₹0.35)** when nobody answers and it widens to everyone. Idle is a fraction of a cent per person per month plus one $1/month key; a thousand people with one incident each come to about $6/month, $10 with the weekly check-in. Numbers from [`cost.py`](cost.py), list prices, counted off real executions.
 - **Live:** https://jseoe3z3uew46fyd6zbceyry6u0ebdgt.lambda-url.ap-south-1.on.aws/ — pressing it pages six test mailboxes and one Telegram, all mine.
 - **Demo video:** *added at submission.*
-- **Proof it works:** [`verify.sh`](verify.sh) runs eighteen checks against the live stack, each asserting on rows and execution history, never on a status code. Last run 18/18. The unit tests and `terraform validate` run on every push: [![ci](https://github.com/aryangorde6/pukaar/actions/workflows/ci.yml/badge.svg)](https://github.com/aryangorde6/pukaar/actions/workflows/ci.yml). Every break during the build is in [`LEARNING-LOG.md`](LEARNING-LOG.md) with the commit that fixed it.
+- **Proof it works:** [`verify.sh`](verify.sh) runs nineteen checks against the live stack, each asserting on rows and execution history, never on a status code. Last run 19/19. The unit tests and `terraform validate` run on every push: [![ci](https://github.com/aryangorde6/pukaar/actions/workflows/ci.yml/badge.svg)](https://github.com/aryangorde6/pukaar/actions/workflows/ci.yml). Every break during the build is in [`LEARNING-LOG.md`](LEARNING-LOG.md) with the commit that fixed it.
 
 Built solo, in the open, during Bharat Builds Tour — First Commit, 17–20 September 2026, ap-south-1.
 
@@ -97,7 +97,7 @@ Measured (19 Sep): Lighthouse 12.8, mobile, on her page and on the timeline page
 | Re-running a send never pages twice | the notification row is written first with `attribute_not_exists`; a retry that finds it delivered sends nothing |
 | A second press during an alert does not start a second alert | `POST /trigger` returns the alert already running for her — open, widened, or claimed within the last half hour — instead of starting another; her page, reopened, shows that alert (check 15) |
 | A link that is prefetched by a mail scanner claims nothing | **GET never writes.** Claim links render on GET and claim on POST; the button is the claim |
-| A circle that reached nobody fails loudly | one bad address is contained to its iteration; a whole circle with zero deliveries goes to `RecordFailure`, the execution fails, and a metric fires — no silent minute of waiting |
+| A circle that reached nobody fails loudly | one bad address is contained to its iteration; a whole circle with zero deliveries goes to `RecordFailure`, the execution fails, a metric fires, and **the operator is emailed** — an EventBridge rule on the execution's end, an SNS topic — so a silent minute of waiting is nobody's secret (check 19) |
 | A claim or a cancel is acted on now, not at the tier boundary | `WaitForClaim` is `dynamodb:updateItem.waitForTaskToken`; the same write that wins the race returns the token |
 | She can cancel at any point, including after someone claimed | after a claim the machine has finished, so the web function asks the broadcast function for the false alarm directly |
 | Her screen never says less than the row knows | `/status` returns who has been told by now on every open alert; her page adds the names as the circle widens, and when the row says `FALLBACK` — everyone told, nobody answered — her screen says so and offers 112 with one tap (check 4) |
@@ -133,12 +133,14 @@ flowchart LR
   SCH[EventBridge Scheduler<br/>weekly] --> CK[checkin Lambda<br/>not an emergency: could you go now?] -->|SES / Telegram| R
   W -->|kms:Decrypt, subject_id context| K[(KMS CMK)]
   W --- DDB[(DynamoDB: incidents, contacts,<br/>notifications, response-stats, subjects)]
+  F -.->|EventBridge rule on the execution's end · SNS| OP[the operator's inbox]
 ```
 
 - **Compute:** eight Python 3.13 Lambdas on arm64, 128 MB, one zip. Six run inside the machine and the weekly check-in runs from an EventBridge Scheduler cron, all under role `pukaar-lambda` (DynamoDB, SES, one metric namespace — **no KMS**); `web` runs under `pukaar-web` (DynamoDB, start/wake the machine, invoke `broadcast`, `kms:Decrypt` — **no SES**).
 - **Data:** five on-demand DynamoDB tables. `notifications` stores only the **SHA-256 of the link token** (GSI `token_hash-index`); the plaintext exists in the email alone. `subjects.record` is a Binary ciphertext.
 - **Edge:** one Lambda Function URL, eleven routes, no API Gateway, no login (the button is hers; the links are one-time, per incident, per person). Three things can reach an alert and each can do one kind of thing: her page carries a key nothing else does, and only a request with it can cancel or place her; a responder's link claims, steps back or leaves; a timeline id reads.
 - **Channels:** email through SES, always; Telegram through the Bot API for a contact row that carries a chat id — the same message and the same link, so a person counts as reached if either channel took it. The bot token is a sensitive Terraform variable in `terraform.tfvars` (gitignored), passed only to the paging functions; the chat ids come from the same file through `seed.sh`, never from the repo.
+- **When it fails:** every spine state catches into `RecordFailure` (row marked `FAILED` with the cause, metric `Pukaar/EscalationFailed`), the execution ends in `Fail`, and an EventBridge rule on that ending publishes to an SNS topic the operator's address is subscribed to (`operator_email` in `terraform.tfvars`). Transient Lambda faults retry three times with backoff; an SES throttle retries four. One person unreachable is contained to their branch of the `Map`; a circle nobody in was reached is the failure above.
 - **Infra:** Terraform, AWS provider 6.x, log retention 7 days, everything in [`main.tf`](main.tf).
 
 ## Availability ranking — who is in the first circle
@@ -227,11 +229,11 @@ Commercial systems converge on this shape — [Alerto](https://alertotech.com/),
 ```bash
 terraform init && terraform apply          # AWS_PROFILE and region in variables.tf
 ./seed.sh                                  # Sunita, her six contacts, their histories, her sealed notes
-./verify.sh                                # eighteen live checks; reseeds before and after
+./verify.sh                                # nineteen live checks; reseeds before and after
 .venv/bin/pytest -q                        # ranking, the learning log, the cost numbers, every string and message, the check count
 ```
 
-`variables.tf` holds the sender identity (SES production access on a verified domain is assumed), `wait_s` (60 in production; every test above passes 3–25) and `max_tier`. Telegram is optional: `terraform.tfvars` (gitignored) with `telegram_bot_token` from @BotFather and `telegram_chat_ids = { ravi = "…" }`; without it, email alone. `checkin_schedule` is the weekly check-in's cron in IST (Wednesday 6 pm by default; empty disables it); `aws lambda invoke --function-name pukaar-checkin` sends one now.
+`variables.tf` holds the sender identity (SES production access on a verified domain is assumed), `wait_s` (60 in production; every test above passes 3–25) and `max_tier`. Telegram is optional: `terraform.tfvars` (gitignored) with `telegram_bot_token` from @BotFather and `telegram_chat_ids = { ravi = "…" }`; without it, email alone. `checkin_schedule` is the weekly check-in's cron in IST (Wednesday 6 pm by default; empty disables it); `aws lambda invoke --function-name pukaar-checkin` sends one now. `operator_email` (same file) is who hears when an escalation fails; SNS sends that address a confirmation to click first.
 
 ---
 

@@ -708,6 +708,57 @@ resource "aws_sfn_state_machine" "escalation" {
 
 # --- Outputs -----------------------------------------------------------------
 
+# A failed escalation must reach a person, not a dashboard. Step Functions puts every
+# execution's end on the default event bus; this rule takes the ones that did not end
+# in Done and mails the operator. The Fail state, RecordFailure's row and metric, and
+# this email are three views of the same fact.
+resource "aws_sns_topic" "failures" {
+  name = "${var.prefix}-failures"
+}
+
+resource "aws_sns_topic_subscription" "operator" {
+  count     = var.operator_email == "" ? 0 : 1
+  topic_arn = aws_sns_topic.failures.arn
+  protocol  = "email"
+  endpoint  = var.operator_email
+}
+
+resource "aws_sns_topic_policy" "failures" {
+  arn = aws_sns_topic.failures.arn
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Effect    = "Allow"
+      Principal = { Service = "events.amazonaws.com" }
+      Action    = "sns:Publish"
+      Resource  = aws_sns_topic.failures.arn
+      Condition = { ArnEquals = { "aws:SourceArn" = aws_cloudwatch_event_rule.failed.arn } }
+    }]
+  })
+}
+
+resource "aws_cloudwatch_event_rule" "failed" {
+  name        = "${var.prefix}-escalation-failed"
+  description = "An escalation ended without help. Tell the operator."
+  event_pattern = jsonencode({
+    source      = ["aws.states"]
+    detail-type = ["Step Functions Execution Status Change"]
+    detail = {
+      stateMachineArn = [aws_sfn_state_machine.escalation.arn]
+      status          = ["FAILED", "TIMED_OUT", "ABORTED"]
+    }
+  })
+}
+
+resource "aws_cloudwatch_event_target" "failed" {
+  rule = aws_cloudwatch_event_rule.failed.name
+  arn  = aws_sns_topic.failures.arn
+  input_transformer {
+    input_paths    = { name = "$.detail.name", status = "$.detail.status" }
+    input_template = "\"Pukaar: escalation <name> ended <status>. Nobody was told that nobody is coming. The incident row carries the reason; the execution history the state it stopped in.\""
+  }
+}
+
 output "state_machine_arn" {
   value = aws_sfn_state_machine.escalation.arn
 }

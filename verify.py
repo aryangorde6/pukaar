@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Eighteen checks against the live stack. Each asserts on rows and execution history,
+"""Nineteen checks against the live stack. Each asserts on rows and execution history,
 never on a status code alone - SUCCEEDED with nothing in the tables is a failure.
 
 Every check requires something positive to exist. A check that would pass against
@@ -32,8 +32,10 @@ ddb = boto3.client("dynamodb", region_name=REGION)
 lam = boto3.client("lambda", region_name=REGION)
 kms = boto3.client("kms", region_name=REGION)
 logs = boto3.client("logs", region_name=REGION)
+cw = boto3.client("cloudwatch", region_name=REGION)
 PREFIX = out["tables"]["value"][0].split("-", 1)[0]
 RUN = time.strftime("%H%M%S")
+T0 = time.time()
 results = []
 
 
@@ -42,10 +44,10 @@ def check(name, ok, detail):
     print(f"{'PASS' if ok else 'FAIL'}  {name}: {detail}")
 
 
-def start(tag, wait_s, max_tier=2):
+def start(tag, wait_s, max_tier=2, subject_id="sunita"):
     incident_id = f"v-{RUN}-{tag}"
     arn = sfn.start_execution(stateMachineArn=SM, name=incident_id,
-                              input=json.dumps({"incident_id": incident_id, "subject_id": "sunita",
+                              input=json.dumps({"incident_id": incident_id, "subject_id": subject_id,
                                                 "wait_s": wait_s, "max_tier": max_tier}))["executionArn"]
     return incident_id, arn
 
@@ -150,6 +152,7 @@ a_id, a_arn = start("fanout", wait_s=5)
 b_id, b_arn = start("claim", wait_s=25)
 c_id, c_arn = start("race", wait_s=25)
 d_id, d_arn = start("cancel", wait_s=25)
+f_id, f_arn = start("fail", wait_s=5, subject_id="nobody")  # a subject with nobody to page: the spine must fail loudly
 
 # 1. three notification rows, delivered, for tier 1
 tier1 = [r for r in wait_for_rows(a_id, 3) if r["tier"]["N"] == "1"]
@@ -460,7 +463,36 @@ check("18 leaving her list: never paged, never asked, no longer named",
       f"her screen names Anil: {'Anil' in idle[idle.find('var names'):idle.find('var names') + 80]}; check-in sent {ping.get('sent')}; "
       f"fresh alert {e_status}: paged {e_paged}, fallback told {len(e_bc.get('told', []))}")
 
+# 19. a broken escalation fails loudly: the row says FAILED and why, the metric counts it,
+# and the operator's mail went out - EventBridge saw the execution end, SNS published.
+def metric_sum(namespace, name, dimensions):
+    pts = cw.get_metric_statistics(Namespace=namespace, MetricName=name, Dimensions=dimensions, StartTime=T0 - 120,
+                                   EndTime=time.time() + 60, Period=60, Statistics=["Sum"])["Datapoints"]
+    return sum(p["Sum"] for p in pts)
+
+
+def wait_metrics(timeout=150):
+    for _ in range(timeout // 10):
+        counted = metric_sum("Pukaar", "EscalationFailed", [])
+        told = metric_sum("AWS/Events", "Invocations", [{"Name": "RuleName", "Value": f"{PREFIX}-escalation-failed"}])
+        mailed = metric_sum("AWS/SNS", "NumberOfMessagesPublished", [{"Name": "TopicName", "Value": f"{PREFIX}-failures"}])
+        if counted and told and mailed:
+            break
+        time.sleep(10)
+    return counted, told, mailed
+
+
+f_status = wait_done(f_arn)
+f_states, f_inc = states(f_arn), incident(f_id)
+f_why = f_inc.get("failure", {}).get("S", "")
+counted, told, mailed = wait_metrics()
+check("19 a broken escalation fails loudly and the operator is told",
+      f_status == "FAILED" and f_states[-2:] == ["RecordFailure", "Failed"] and f_inc["status"]["S"] == "FAILED"
+      and "nobody to page" in f_why and "failed_at" in f_inc and counted >= 1 and told >= 1 and mailed >= 1,
+      f"execution {f_status}, states {f_states}; row {f_inc['status']['S']}, why: {f_why[f_why.find('errorMessage'):][:60]}; "
+      f"EscalationFailed metric {counted:.0f}, rule invoked {told:.0f}, SNS published {mailed:.0f}")
+
 print()
 passed = sum(1 for _, ok in results if ok)
-print(f"{passed}/{len(results)} passed · executions: {a_arn.rsplit(':', 1)[1]}, {b_id}, {c_id}, {d_id}")
+print(f"{passed}/{len(results)} passed · executions: {a_arn.rsplit(':', 1)[1]}, {b_id}, {c_id}, {d_id}, {f_id}")
 sys.exit(0 if passed == len(results) else 1)
