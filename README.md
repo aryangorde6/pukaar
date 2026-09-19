@@ -20,7 +20,7 @@
 - **The design decision:** the escalation is a Step Functions state machine, not a loop in a server. A parallel `Map` pages the whole circle at once. A conditional DynamoDB write decides the race between two answerers. The machine waits for a task token, so a claim or a cancel wakes it in about a second instead of at the next timer.
 - **Cost per incident:** about **$0.0014 (₹0.12)** when the son answers from the first circle, **$0.0039 (₹0.35)** when nobody answers and it widens to everyone. Idle cost is a fraction of a cent per person per month, plus one $1/month KMS key. A thousand people with one incident each: about $6/month, or $10 with the weekly check-in. Numbers from [`cost.py`](cost.py), list prices, counted off real executions.
 - **Live:** https://jseoe3z3uew46fyd6zbceyry6u0ebdgt.lambda-url.ap-south-1.on.aws/ (pressing it pages six test mailboxes and one Telegram, all mine).
-- **Demo video:** *added at submission.*
+- **Demo video:** https://youtu.be/GaQZs1yBAyU (2:57; the timers are compressed 60 s → 10 s for the film).
 - **Proof it works:** [`verify.sh`](verify.sh) runs twenty-one checks against the live stack. Each one asserts on rows and execution history, not on status codes. Last run 21/21. Unit tests and `terraform validate` run on every push: [![ci](https://github.com/aryangorde6/pukaar/actions/workflows/ci.yml/badge.svg)](https://github.com/aryangorde6/pukaar/actions/workflows/ci.yml). Every break during the build is in [`LEARNING-LOG.md`](LEARNING-LOG.md) with the commit that fixed it.
 
 Built solo during Bharat Builds Tour, First Commit, 17–20 September 2026, in ap-south-1.
