@@ -81,22 +81,23 @@ Pukaar replaces the sequence with a fan-out. One press pages the three people mo
   <sub><b>One alert, in order.</b> Every line a row this system wrote, nothing inferred.</sub>
 </p>
 
-*All from real alerts on the live stack, 18–19 Sep.*
+*All thirteen from real alerts on the live stack, 19 Sep 13:05–13:14 — two presses, one claimed, released and cancelled, one nobody answered — taken the way she and they would open the pages.*
 
 ### Design — the rules the screens follow
 
-1. **One button, 240 px tall, its words 44 px capitals.** Her thumb finds it without aiming, and the press is felt before the network answers: the button gives under the finger and the phone buzzes once (200 ms, where it can), then the words change to *Calling for help…*. The only other controls she ever sees are Cancel, the language pill, 112 and — once — the location question.
+1. **One button, at least 240 px tall — a third of the screen on a phone — its words 44 px capitals.** Her thumb finds it without aiming. It has an edge, like a thing that can be pressed: on the press it goes down 8 px, the phone buzzes once (200 ms, where it can), and the words change to *Calling for help…* — all before the network answers. The only other controls she ever sees are Cancel, the language pill, 112 and — once — the location question.
 2. **20 px body text, 40 px headings, line height 1.6** — set for eyes in their seventies. The timeline's rows are 24 px; nothing on any page is smaller than 16 px.
 3. **Every colour pair passes 7:1** — the AAA line, not AA's 4.5; the lowest is 7.3:1 (the caution text on its card), white on the red button is 7.8:1. Red means emergency, green means someone is coming, amber means it was called off — the same three meanings on every page.
 4. **Every state says who.** *Vaishali, Ravi and Anil will be told* before the press; *Ravi is coming* after it; *Ravi can't come after all — Meena, Prakash and Sunil have been told*. Never "your contacts", never a count alone.
 5. **First person, in the words the person would say.** *I need help. I'm going now. I can't go after all. Cancel — I'm OK. I'd be reachable now.*
 6. **Nothing to learn.** No icons but a tick and a warning sign; no menus, no settings, no sign-in. The one question her page ever asks — may helpers see where you are — is asked once, and the answer sticks.
 7. **Her language, and her phone's voice.** The pill switches between English and hers and the phone remembers; every state after the press is read aloud where the phone has a voice for her language, so she does not have to read at all.
-8. **Targets: 64 px for every button, 96 px for *I'm going now*, 48 px for the pill and every 112 link.** A 4 px focus ring for anyone on a keyboard; header, main and footer landmarks on every page; the timeline adds its new lines in place while the alert is open instead of reloading, so a screen reader is not thrown back to the top every five seconds. axe-core 4.10.2 with every rule set it has, best-practice included: no violations on her page in all six states, the alert, *You're going*, *already on the way*, *cancelled*, the check-in, the leave page, the timeline and the 404 (19 Sep).
+8. **Targets: 64 px for every button, 96 px for *I'm going now*, 48 px for the pill and every 112 link.** A 4 px focus ring for anyone on a keyboard; header, main and footer landmarks on every page; the timeline adds its new lines in place while the alert is open instead of reloading, so a screen reader is not thrown back to the top every five seconds. axe-core 4.10.2 with every rule set it has, best-practice included: no violations on her page in all six states, the alert, *You're going*, *already on the way*, *cancelled*, the check-in, the leave page, the timeline and the 404 (19 Sep; her page's six states and the timeline run again after the last change, 13:20, still none).
 9. **112 at the foot of every page.** The button is not a promise, and the page says so.
 10. **One column, 720 px at most, light only.** The same page on a phone, a laptop and a shared screen, and the same at three in the morning.
+11. **Motion only where it carries meaning, and none if the phone asks for none.** A red dot breathes beside *Waiting for one of them to answer* so she knows the page is alive; a new state arrives with a 0.3 s rise; the button goes down in 60 ms. `prefers-reduced-motion` turns all three off. Nothing spins, nothing slides in from the side, nothing loops for decoration.
 
-Measured (19 Sep): Lighthouse 12.8, mobile, on her page and on the timeline page of two closed alerts — performance 100, accessibility 100, best practices 100 on each; SEO 50 on purpose (`noindex`, no description: none of these pages is for search). The page is 40 KB of eleven languages, styles and script and is served gzipped, 11 KB, to any browser that accepts it — she may be opening it on one bar of signal.
+Measured (19 Sep, after the last change to the pages): Lighthouse 12.8, mobile, on her page and on the timeline page — performance 100, accessibility 100, best practices 100 on each; SEO 50 on purpose (`noindex`, no description: none of these pages is for search). The page is 40 KB of eleven languages, styles and script and is served gzipped, 11 KB, to any browser that accepts it — she may be opening it on one bar of signal.
 
 ### Correctness properties, stated
 

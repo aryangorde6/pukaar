@@ -813,7 +813,8 @@ STYLE = """
   --emergency: #A4161A; --on-emergency: #FFFFFF; --emergency-active: #7F1113;
   --safe: #14532D; --safe-bg: #E4F2E8; --caution: #7A4106; --caution-bg: #FDF1E0; --over: #55504D;
   --text-xs: 16px; --text-sm: 18px; --text-base: 20px; --text-lg: 24px; --text-xl: 32px;
-  --text-2xl: 40px; --text-3xl: 56px; --text-action: 44px;
+  --text-2xl: 40px; --text-3xl: 48px; --text-action: 44px;
+  --edge: 8px; --shadow: 0 14px 28px rgba(20, 17, 15, 0.16);
   --space-3: 12px; --space-4: 16px; --space-6: 24px; --space-8: 32px; --space-12: 48px;
   --radius: 12px; --radius-btn: 20px; --target-min: 64px;
 }
@@ -824,7 +825,7 @@ html { background: var(--bg); color: var(--ink); color-scheme: only light;
   font-size: var(--text-base); line-height: 1.6; }
 body { margin: 0; padding: var(--space-6); max-width: 36rem; margin-inline: auto; }
 @media (max-width: 360px) { body { padding: var(--space-4); } }
-h1 { font-size: var(--text-2xl); line-height: 1.2; font-weight: 700; margin: 0 0 var(--space-6); }
+h1 { font-size: var(--text-2xl); line-height: 1.2; font-weight: 700; letter-spacing: -0.01em; margin: 0 0 var(--space-6); }
 h2 { font-size: var(--text-xl); line-height: 1.3; font-weight: 700; margin: 0 0 var(--space-4); }
 h1, h2 { text-wrap: balance; }
 #sent h1 { font-size: var(--text-xl); }
@@ -834,14 +835,18 @@ p { margin: 0 0 var(--space-4); }
 .btn { display: block; width: 100%; min-height: var(--target-min); border: 0; cursor: pointer;
   font: inherit; font-weight: 700; border-radius: var(--radius); padding: var(--space-4); }
 .btn:focus-visible { outline: 4px solid var(--ink); outline-offset: 3px; }
-.btn-emergency { min-height: 240px; font-size: var(--text-action); line-height: 1.15;
+.btn-emergency { min-height: max(240px, 36vh); font-size: var(--text-action); line-height: 1.15;
   letter-spacing: 0.02em; text-transform: uppercase; border-radius: var(--radius-btn);
-  background: var(--emergency); color: var(--on-emergency); }
-.btn-emergency:active { background: var(--emergency-active); transform: scale(0.985); }
-.btn:active { transform: scale(0.985); }
-.btn-emergency[disabled] { background: var(--border); cursor: not-allowed; }
+  background: var(--emergency); color: var(--on-emergency);
+  box-shadow: 0 var(--edge) 0 var(--emergency-active), var(--shadow); }
+/* The button has an edge, like a thing that can be pressed: the finger sees it go down. */
+.btn-emergency:active, .btn-safe:active { transform: translateY(var(--edge)); box-shadow: 0 0 0 var(--emergency-active), 0 4px 10px rgba(20, 17, 15, 0.16); }
+.btn-emergency:active { background: var(--emergency-active); }
+.btn { transition: transform 0.06s ease-out, box-shadow 0.06s ease-out; }
+.btn-secondary:active { transform: translateY(2px); }
+.btn-emergency[disabled] { background: var(--border); box-shadow: none; cursor: not-allowed; }
 main a.btn-emergency { display: flex; align-items: center; justify-content: center; text-align: center;
-  text-decoration: none; color: var(--on-emergency); min-height: 240px; line-height: 1.15; padding: var(--space-4); margin: 0; }  /* the tel: rule below would shrink and recolour it */
+  text-decoration: none; color: var(--on-emergency); min-height: max(240px, 36vh); line-height: 1.15; padding: var(--space-4); margin: 0; }  /* the tel: rule below would shrink and recolour it */
 .btn-secondary[disabled] { color: var(--ink-muted); cursor: not-allowed; }
 @media (hover: hover) {
   .btn-emergency:hover:not([disabled]) { background: var(--emergency-active); }
@@ -855,18 +860,24 @@ main a.btn-emergency { display: flex; align-items: center; justify-content: cent
 .card-emergency { background: var(--surface); border: 3px solid var(--emergency); color: var(--emergency); }
 .banner { font-size: var(--text-3xl); line-height: 1.1; font-weight: 700; letter-spacing: 0.02em;
   color: var(--emergency); margin: 0 0 var(--space-4); }
-.timeline { list-style: none; padding: 0; margin: 0; }
-.timeline li { display: grid; grid-template-columns: 7.5rem 1fr; gap: var(--space-4); padding: var(--space-3) 0;
-  border-top: 2px solid var(--border); font-size: var(--text-lg); line-height: 1.4; }
+.timeline { list-style: none; padding: 0 0 0 28px; margin: 0; position: relative; }
+.timeline::before { content: ""; position: absolute; left: 7px; top: 12px; bottom: 12px; width: 3px; border-radius: 2px; background: var(--border); }
+.timeline li { display: grid; grid-template-columns: 7.5rem 1fr; gap: var(--space-4); padding: var(--space-3) 0; position: relative;
+  border-top: 1px solid #E6E1DC; font-size: var(--text-lg); line-height: 1.4; }
+.timeline li:first-child { border-top: 0; }
+.timeline li::before { content: ""; position: absolute; left: -27px; top: 19px; width: 15px; height: 15px; border-radius: 50%;
+  background: var(--surface); border: 3px solid var(--border); }
+.timeline li:last-child::before { background: var(--border); }
+@media (max-width: 480px) { .timeline li { grid-template-columns: 1fr; gap: 2px; } .timeline time { font-size: var(--text-sm); } }
 .timeline time { color: var(--ink-muted); font-variant-numeric: tabular-nums; white-space: nowrap; }
 .banner-calm { color: var(--safe); }
-.btn-safe { background: var(--safe); color: #FFFFFF; border-radius: var(--radius-btn); }
-.btn-safe:active { background: #0F3D21; }
+.btn-safe { background: var(--safe); color: #FFFFFF; border-radius: var(--radius-btn); box-shadow: 0 var(--edge) 0 #0F3D21, var(--shadow); }
+.btn-safe:active { background: #0F3D21; box-shadow: 0 0 0 #0F3D21, 0 4px 10px rgba(20, 17, 15, 0.16); }
 .lead { font-size: var(--text-lg); margin-top: calc(-1 * var(--space-4)); }
 .address { font-size: var(--text-lg); line-height: 1.5; }
 .btn-inline { display: inline-block; width: auto; min-width: var(--target-min); margin-top: 0; text-decoration: none;
   text-align: center; }
-.btn-claim { min-height: 96px; font-size: var(--text-xl); text-transform: none; letter-spacing: 0; }
+.btn-claim { min-height: 96px; font-size: var(--text-xl); text-transform: none; letter-spacing: 0; margin-top: var(--space-4); margin-bottom: var(--space-6); }
 .card h1 { font-size: var(--text-xl); margin-bottom: var(--space-3); }
 .card p { margin: 0; }
 .card-over { background: var(--surface); border: 3px solid var(--border); color: var(--over); }
@@ -876,7 +887,15 @@ hr { border: 0; border-top: 2px solid var(--border); margin: var(--space-6) 0; }
 a[href^="tel:"] { color: inherit; display: inline-block; min-height: 48px; line-height: 48px; padding: 0 var(--space-3);
   margin: -14px calc(-1 * var(--space-3)); font-weight: 700; text-underline-offset: 4px; }
 a:focus-visible { outline: 4px solid var(--ink); outline-offset: 3px; border-radius: 6px; }
-.langbar { text-align: right; margin: 0 0 var(--space-4); }
+main a:not(.btn) { color: var(--ink); font-weight: 700; text-decoration-thickness: 2px; text-underline-offset: 4px; }
+.langbar { display: flex; justify-content: space-between; align-items: center; gap: var(--space-4); margin: 0 0 var(--space-4); }
+.brand { font-size: var(--text-sm); font-weight: 700; letter-spacing: 0.12em; text-transform: uppercase; color: var(--ink-muted); margin: 0; }
+.waiting { display: flex; align-items: center; gap: var(--space-3); }
+.pulse { flex: none; width: 14px; height: 14px; border-radius: 50%; background: var(--emergency); animation: pulse 2s ease-in-out infinite; }
+@keyframes pulse { 0%, 100% { transform: scale(1); opacity: 1; } 50% { transform: scale(0.6); opacity: 0.45; } }
+main { animation: arrive 0.3s ease-out; }
+@keyframes arrive { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: none; } }
+@media (prefers-reduced-motion: reduce) { .pulse, main { animation: none; } .btn { transition: none; } }
 .btn-lang { min-height: 48px; padding: 0 var(--space-4); border-radius: 999px; cursor: pointer;
   background: var(--surface); color: var(--ink); border: 2px solid var(--border); font: inherit;
   font-size: var(--text-sm); font-weight: 700; }
@@ -900,20 +919,20 @@ PAGE = Template("""<!doctype html>
 </head>
 <body>
 <div class="sr-only" aria-live="assertive" id="announce"></div>
-<header><p class="langbar"><button class="btn-lang" id="lang" lang="mr">मराठी</button></p></header>
+<header><p class="langbar"><span class="brand" lang="en">Pukaar</span><button class="btn-lang" id="lang" lang="mr">मराठी</button></p></header>
 
 <main id="idle">
   <h1 data-i18n="idle_h1">I NEED HELP</h1>
   <button class="btn btn-emergency" id="press" data-i18n="press" $disabled>I need help</button>
   <p style="margin-top: var(--space-6)"><span data-i18n="press_once">Press once.</span><br><span id="told">$told</span></p>
-  <p class="langbar" style="text-align:left"><button class="btn-lang" id="allow-location" data-i18n="location" hidden>Let helpers see where you are</button></p>
+  <p class="langbar" style="justify-content:flex-start"><button class="btn-lang" id="allow-location" data-i18n="location" hidden>Let helpers see where you are</button></p>
 </main>
 
 <main id="sent" hidden>
   <h1 data-i18n="sent_h1">Help is being called</h1>
   <p id="sent-back" hidden></p>
   <p><span id="sent-names"></span><br><span class="time" id="sent-time"></span></p>
-  <p class="muted" data-i18n="waiting">Waiting for one of them to answer…</p>
+  <p class="muted waiting"><span class="pulse" aria-hidden="true"></span><span data-i18n="waiting">Waiting for one of them to answer…</span></p>
   <button class="btn btn-secondary" id="cancel" data-i18n="cancel">Cancel — I’m OK</button>
 </main>
 
@@ -1110,7 +1129,7 @@ PAGE = Template("""<!doctype html>
 def _page(title, body):
     return ("""<!doctype html><html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1"><meta name="robots" content="noindex">
-<meta name="color-scheme" content="only light">
+<meta name="color-scheme" content="only light"><meta name="theme-color" content="#FAF9F7">
 <link rel="icon" href="/icon-192.png" type="image/png">
 <title>""" + title + """</title><style>""" + STYLE + """</style></head><body>
 <main>
