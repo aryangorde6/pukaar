@@ -11,6 +11,7 @@ Run through ./verify.sh, which reads the Terraform outputs.
 import hashlib
 import json
 import os
+import re
 import secrets
 import subprocess
 import sys
@@ -379,15 +380,21 @@ st1, p1 = http("POST", "trigger")
 st2, p2 = http("POST", "trigger")
 first, second = json.loads(p1), json.loads(p2)
 pressed = first.get("incident_id", "")
+wait_for_rows(pressed, 3)
 page_running = http("GET", "")[1]
+# reopened mid-alert, her page names the people this alert reached - exactly them. The ranking has
+# already learned from these pages, so "who a press now would page" is a different list.
+shown = sorted(json.loads(re.search(r"var names = (\[.*?\]);", page_running).group(1)))
+paged = sorted(c.capitalize() for c in reached(pressed))
 st3, p3 = http("POST", "cancel", json.dumps({"incident_id": pressed, "key": HER_KEY}).encode())
 page_idle = http("GET", "")[1]
-check("15 a second press during an alert joins it, one incident, her page carries it",
+check("15 a second press during an alert joins it, one incident, her page carries it and names exactly who it reached",
       st1 == 200 and st2 == 200 and pressed and second.get("incident_id") == pressed and second.get("already") is True
-      and f'var running = "{pressed}"' in page_running and st3 == 200 and json.loads(p3).get("status") == "CANCELLED"
-      and "var running = null" in page_idle,
+      and f'var running = "{pressed}"' in page_running and shown == paged and len(paged) == 3
+      and st3 == 200 and json.loads(p3).get("status") == "CANCELLED" and "var running = null" in page_idle,
       f"press -> {pressed}, press again -> {second.get('incident_id')} already={second.get('already')}; "
-      f"page while open: {'carries it' if pressed in page_running else 'does not'}; cancelled -> page idle: {'var running = null' in page_idle}")
+      f"page while open: {'carries it' if pressed in page_running else 'does not'}, names {shown} vs reached {paged}; "
+      f"cancelled -> page idle: {'var running = null' in page_idle}")
 
 # 16. where she is: a position her page sends lands on the live incident and on the page a
 #     responder opens; on a finished alert it is refused and nothing is written

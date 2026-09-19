@@ -37,32 +37,42 @@ Pukaar replaces the sequence with a fan-out. One press pages the three people mo
 <table>
 <tr>
 <td width="33%" align="center"><img src="docs/01-her-button.png" alt="Her screen: one button, I NEED HELP, and who will be told"></td>
-<td width="33%" align="center"><img src="docs/06-her-button-marathi.png" alt="Her screen in Marathi: मला मदत हवी आहे, and who will be told"></td>
-<td width="33%" align="center"><img src="docs/02-the-alert.png" alt="The alert a contact opens: EMERGENCY, her name, address, Open in maps, where her phone is, I'm going now"></td>
+<td width="33%" align="center"><img src="docs/11-help-is-being-called.png" alt="Her screen after the press: Help is being called, Anil, Ravi and Vaishali have been told, 12:44 pm, Waiting for one of them to answer, Cancel — I'm OK"></td>
+<td width="33%" align="center"><img src="docs/12-ravi-is-coming.png" alt="Her screen when someone answers: Ravi is coming, On the way now, Ravi has your medical notes"></td>
 </tr>
 <tr>
 <td align="center"><sub><b>Her screen.</b> One button, and who will be told is already on it.</sub></td>
-<td align="center"><sub><b>The same screen in Marathi.</b> One pill; English a tap away.</sub></td>
-<td align="center"><sub><b>What a contact opens.</b> Her name, her address, where her phone is, <i>I'm going now</i>.</sub></td>
+<td align="center"><sub><b>After the press.</b> Who has been told, the time, and one thing to do: <i>Cancel — I'm OK</i>.</sub></td>
+<td align="center"><sub><b>When someone answers.</b> <i>Ravi is coming</i> — by name, the moment the row changes; the phone says it aloud.</sub></td>
 </tr>
 <tr>
+<td width="33%" align="center"><img src="docs/02-the-alert.png" alt="The alert a contact opens: EMERGENCY, her name, address, Open in maps, where her phone is, I'm going now"></td>
 <td width="33%" align="center"><img src="docs/03-youre-going.png" alt="After claiming: You're going, the address, her sealed medical notes, and I can't go after all"></td>
 <td width="33%" align="center"><img src="docs/04-already-on-the-way.png" alt="The loser of the race: Ravi is already on the way"></td>
-<td width="33%" align="center"><img src="docs/07-cant-come.png" alt="Her screen after the one who claimed stepped back: Ravi can't come after all, and who has been told now"></td>
 </tr>
 <tr>
+<td align="center"><sub><b>What a contact opens.</b> Her name, her address, where her phone is, <i>I'm going now</i>.</sub></td>
 <td align="center"><sub><b>After the tap.</b> <i>You're going</i>; her sealed notes, opened for him alone; <i>I can't go after all</i>.</sub></td>
 <td align="center"><sub><b>The other two.</b> <i>Ravi is already on the way</i> — by name, from the row.</sub></td>
-<td align="center"><sub><b>Her screen when he steps back.</b> Who is told now.</sub></td>
 </tr>
 <tr>
-<td width="33%" align="center"><img src="docs/10-no-one.png" alt="Her screen when everyone on her list has been told and nobody has answered: No one has answered yet, and a CALL 112 NOW button"></td>
+<td width="33%" align="center"><img src="docs/07-cant-come.png" alt="Her screen after the one who claimed stepped back: Ravi can't come after all, and who has been told now"></td>
+<td width="33%" align="center"><img src="docs/10-no-one.png" alt="Her screen when everyone was told and nobody answered: No one has answered yet, CALL 112 NOW"></td>
 <td width="33%" align="center"><img src="docs/05-cancelled.png" alt="After she cancels: Sunita cancelled this alert"></td>
+</tr>
+<tr>
+<td align="center"><sub><b>Her screen when he steps back.</b> Who is told now.</sub></td>
+<td align="center"><sub><b>Everyone told, nobody answered.</b> The button becomes <i>Call 112 now</i>.</sub></td>
+<td align="center"><sub><b>After she cancels.</b> What a contact sees: <i>Sunita cancelled this alert</i>.</sub></td>
+</tr>
+<tr>
+<td width="33%" align="center"><img src="docs/06-her-button-marathi.png" alt="Her screen in Marathi: मला मदत हवी आहे, and who will be told"></td>
+<td width="33%" align="center"><img src="docs/13-ravi-is-coming-marathi.png" alt="Ravi is coming, in Marathi: Ravi येत आहे, वाटेत आहेत, रद्द करा — मी ठीक आहे"></td>
 <td width="33%" align="center"><img src="docs/09-checkin.png" alt="The weekly check-in a contact opens: NOT AN EMERGENCY, Sunita is fine, I'd be reachable now"></td>
 </tr>
 <tr>
-<td align="center"><sub><b>Everyone told, nobody answered.</b> The button becomes <i>Call 112 now</i>.</sub></td>
-<td align="center"><sub><b>After she cancels.</b> What a contact sees: <i>Sunita cancelled this alert</i>.</sub></td>
+<td align="center"><sub><b>The same screen in Marathi.</b> One pill; English a tap away.</sub></td>
+<td align="center"><sub><b>And the same moment in Marathi.</b> Every state, in her language, read aloud.</sub></td>
 <td align="center"><sub><b>The weekly check-in.</b> <i>Not an emergency</i>; one tap teaches the ranking who answers.</sub></td>
 </tr>
 </table>
@@ -71,11 +81,11 @@ Pukaar replaces the sequence with a fan-out. One press pages the three people mo
   <sub><b>One alert, in order.</b> Every line a row this system wrote, nothing inferred.</sub>
 </p>
 
-*All from real alerts on the live stack, 18 Sep.*
+*All from real alerts on the live stack, 18–19 Sep.*
 
 ### Design — the rules the screens follow
 
-1. **One button, 240 px tall, its words 44 px capitals.** Her thumb finds it without aiming. The only other controls she ever sees are Cancel, the language pill, 112 and — once — the location question.
+1. **One button, 240 px tall, its words 44 px capitals.** Her thumb finds it without aiming, and the press is felt before the network answers: the button gives under the finger and the phone buzzes once (200 ms, where it can), then the words change to *Calling for help…*. The only other controls she ever sees are Cancel, the language pill, 112 and — once — the location question.
 2. **20 px body text, 40 px headings, line height 1.6** — set for eyes in their seventies. The timeline's rows are 24 px; nothing on any page is smaller than 16 px.
 3. **Every colour pair passes 7:1** — the AAA line, not AA's 4.5; the lowest is 7.3:1 (the caution text on its card), white on the red button is 7.8:1. Red means emergency, green means someone is coming, amber means it was called off — the same three meanings on every page.
 4. **Every state says who.** *Vaishali, Ravi and Anil will be told* before the press; *Ravi is coming* after it; *Ravi can't come after all — Meena, Prakash and Sunil have been told*. Never "your contacts", never a count alone.

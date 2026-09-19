@@ -222,6 +222,8 @@ def trigger_page():
         told = "No one has been added yet, so this button cannot reach anyone."
         disabled = "disabled"
     running = open_incident()
+    if running:  # reopened during an alert: the names are the people this alert reached, not who a press now would page
+        names = told_names(running) or names
     return PAGE.substitute(told=told, disabled=disabled, names_json=json.dumps(names), key_json=json.dumps(HER_KEY),
                            running_json=json.dumps(running["incident_id"]["S"] if running else None),
                            strings_json=json.dumps(STRINGS, ensure_ascii=False))
@@ -835,7 +837,8 @@ p { margin: 0 0 var(--space-4); }
 .btn-emergency { min-height: 240px; font-size: var(--text-action); line-height: 1.15;
   letter-spacing: 0.02em; text-transform: uppercase; border-radius: var(--radius-btn);
   background: var(--emergency); color: var(--on-emergency); }
-.btn-emergency:active { background: var(--emergency-active); }
+.btn-emergency:active { background: var(--emergency-active); transform: scale(0.985); }
+.btn:active { transform: scale(0.985); }
 .btn-emergency[disabled] { background: var(--border); cursor: not-allowed; }
 main a.btn-emergency { display: flex; align-items: center; justify-content: center; text-align: center;
   text-decoration: none; color: var(--on-emergency); min-height: 240px; line-height: 1.15; padding: var(--space-4); margin: 0; }  /* the tel: rule below would shrink and recolour it */
@@ -1069,6 +1072,7 @@ PAGE = Template("""<!doctype html>
   var press = function () {
     var btn = document.getElementById("press");
     btn.disabled = true; btn.textContent = t("press_busy");
+    try { navigator.vibrate(200); } catch (e) {}  // the press felt in the hand, before the network answers
     fetch("/trigger", { method: "POST" })
       .then(function (r) { if (!r.ok) throw new Error(r.status); return r.json(); })
       .then(function (data) {
