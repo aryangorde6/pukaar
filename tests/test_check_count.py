@@ -6,7 +6,7 @@ import re
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
-WORDS = {17: "seventeen", 18: "eighteen", 19: "nineteen", 20: "twenty"}
+WORDS = {17: "seventeen", 18: "eighteen", 19: "nineteen", 20: "twenty", 21: "twenty-one"}
 
 
 def test_every_mention_of_the_check_count_matches_verify_py():

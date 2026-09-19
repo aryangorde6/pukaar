@@ -6,6 +6,7 @@ import os
 import time
 
 import boto3
+from botocore.exceptions import ClientError
 
 ddb = boto3.client("dynamodb")
 cw = boto3.client("cloudwatch")
@@ -23,17 +24,32 @@ def handler(event, context):
     reason = json.dumps(error)[:900]
 
     if incident_id != "unknown":
-        ddb.update_item(
-            TableName=INCIDENTS,
-            Key={"incident_id": {"S": incident_id}},
-            UpdateExpression="SET #s = :failed, failure = :why, failed_at = :now",
-            ExpressionAttributeNames={"#s": "status"},
-            ExpressionAttributeValues={
-                ":failed": {"S": "FAILED"},
-                ":why": {"S": reason},
-                ":now": {"N": str(int(time.time()))},
-            },
-        )
+        # The status becomes FAILED only while nobody has answered. A claim or a cancel that landed
+        # before the spine broke is what happened; the failure is recorded beside it, not over it.
+        try:
+            ddb.update_item(
+                TableName=INCIDENTS,
+                Key={"incident_id": {"S": incident_id}},
+                UpdateExpression="SET #s = :failed, failure = :why, failed_at = :now",
+                ConditionExpression="attribute_not_exists(#s) OR #s IN (:open, :fallback)",
+                ExpressionAttributeNames={"#s": "status"},
+                ExpressionAttributeValues={
+                    ":failed": {"S": "FAILED"},
+                    ":open": {"S": "OPEN"},
+                    ":fallback": {"S": "FALLBACK"},
+                    ":why": {"S": reason},
+                    ":now": {"N": str(int(time.time()))},
+                },
+            )
+        except ClientError as e:
+            if e.response["Error"]["Code"] != "ConditionalCheckFailedException":
+                raise
+            ddb.update_item(
+                TableName=INCIDENTS,
+                Key={"incident_id": {"S": incident_id}},
+                UpdateExpression="SET failure = :why, failed_at = :now",
+                ExpressionAttributeValues={":why": {"S": reason}, ":now": {"N": str(int(time.time()))}},
+            )
 
     cw.put_metric_data(
         Namespace="Pukaar",

@@ -1,6 +1,6 @@
 # What can be checked without the stack: the unit tests (ranking, the learning log's
 # hashes and dates, the README's cost figures) and that the Terraform parses. The
-# twenty live checks in verify.sh need the deployed stack and run by hand.
+# twenty-one live checks in verify.sh need the deployed stack and run by hand.
 name: ci
 on: [push, pull_request]
 jobs:

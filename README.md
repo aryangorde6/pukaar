@@ -21,7 +21,7 @@
 - **Cost per incident:** about **$0.0014 (₹0.12)** when the son answers from the first circle, **$0.0039 (₹0.35)** when nobody answers and it widens to everyone. Idle cost is a fraction of a cent per person per month, plus one $1/month KMS key. A thousand people with one incident each: about $6/month, or $10 with the weekly check-in. Numbers from [`cost.py`](cost.py), list prices, counted off real executions.
 - **Live:** https://jseoe3z3uew46fyd6zbceyry6u0ebdgt.lambda-url.ap-south-1.on.aws/ (pressing it pages six test mailboxes and one Telegram, all mine).
 - **Demo video:** *added at submission.*
-- **Proof it works:** [`verify.sh`](verify.sh) runs twenty checks against the live stack. Each one asserts on rows and execution history, not on status codes. Last run 20/20. Unit tests and `terraform validate` run on every push: [![ci](https://github.com/aryangorde6/pukaar/actions/workflows/ci.yml/badge.svg)](https://github.com/aryangorde6/pukaar/actions/workflows/ci.yml). Every break during the build is in [`LEARNING-LOG.md`](LEARNING-LOG.md) with the commit that fixed it.
+- **Proof it works:** [`verify.sh`](verify.sh) runs twenty-one checks against the live stack. Each one asserts on rows and execution history, not on status codes. Last run 21/21. Unit tests and `terraform validate` run on every push: [![ci](https://github.com/aryangorde6/pukaar/actions/workflows/ci.yml/badge.svg)](https://github.com/aryangorde6/pukaar/actions/workflows/ci.yml). Every break during the build is in [`LEARNING-LOG.md`](LEARNING-LOG.md) with the commit that fixed it.
 
 Built solo during Bharat Builds Tour, First Commit, 17–20 September 2026, in ap-south-1.
 
@@ -256,7 +256,7 @@ Commercial systems converge on this shape ([Alerto](https://alertotech.com/), [H
 ```bash
 terraform init && terraform apply          # AWS_PROFILE and region in variables.tf
 ./seed.sh                                  # Sunita, her six contacts, their histories, her sealed notes
-./verify.sh                                # twenty live checks; reseeds before and after
+./verify.sh                                # twenty-one live checks; reseeds before and after
 .venv/bin/pytest -q                        # ranking, the learning log, the cost numbers, every string and message, the check count
 ```
 

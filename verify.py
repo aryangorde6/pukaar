@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Twenty checks against the live stack. Each asserts on rows and execution history,
+"""Twenty-one checks against the live stack. Each asserts on rows and execution history,
 never on a status code alone - SUCCEEDED with nothing in the tables is a failure.
 
 Every check requires something positive to exist. A check that would pass against
@@ -534,6 +534,41 @@ check("20 the rails hold: backups, no deletion, an hour's cap, a bounce and a fa
       f"PITR {sum(v == 'ENABLED' for v in backups.values())}/5, deletion protection {sum(guarded.values())}/5, "
       f"machine TimeoutSeconds {cap}; alarm -> topic {alarm_topic}; {domain} default set {default_set!r}, bounce -> topic {len(bounce_dest)}; "
       f"SES Bounce {bounced:.0f}, topic published {published:.0f} (was {mailed:.0f})")
+
+# 21. what a second reader found (19 Sep 21:50, a review by Cursor): every claim and cancel above
+# happened mid-wait. After the last circle the machine has passed its last wait, so a late claim
+# or a cancel from there has to be broadcast by the web function itself; two presses in the same
+# instant have to be one alert (the subject row is taken with a condition before any machine
+# starts); and a bad body on /cancel is a 400, never an error that pages the operator.
+late = plant_token(e_id, "ravi")                     # e_id ended in FALLBACK in check 18, five reached
+st_l, _ = http("POST", f"claim/{late}")
+l_inc = incident(e_id); l_bc = json.loads(l_inc.get("broadcast", {}).get("S", "{}"))
+st_c, p_c = http("POST", "cancel", json.dumps({"incident_id": a_id, "key": HER_KEY}).encode())  # a_id: FALLBACK since check 4
+c_inc = incident(a_id); c_bc = json.loads(c_inc.get("broadcast", {}).get("S", "{}"))
+still_listed = sorted(c for c in reached(a_id) if "left_at" not in contact(c))  # anil left in check 18
+pair = [None, None]
+def press(i):
+    pair[i] = json.loads(http("POST", "trigger")[1])
+threads = [threading.Thread(target=press, args=(i,)) for i in range(2)]
+[t.start() for t in threads]; [t.join() for t in threads]
+r_ids = {p["incident_id"] for p in pair}
+r_id = pair[0]["incident_id"]
+wait_for_rows(r_id, 3)
+http("POST", "cancel", json.dumps({"incident_id": r_id, "key": HER_KEY}).encode())
+r_status = wait_done(SM.replace(":stateMachine:", ":execution:") + ":" + r_id)
+st_bad, _ = http("POST", "cancel", b"not-json")
+st_key, _ = http("POST", "cancel", json.dumps({"incident_id": a_id, "key": "\u00e9"}).encode())
+check("21 after the last circle a claim or a cancel still tells everyone; two presses at once are one alert; a bad body is a 400",
+      st_l == 200 and l_inc["status"]["S"] == "CLAIMED" and l_inc["claimed_by"]["S"] == "ravi"
+      and l_bc.get("kind") == "someone_going" and sorted(l_bc.get("told", [])) == reached(e_id)
+      and st_c == 200 and c_inc["status"]["S"] == "CANCELLED" and c_bc.get("kind") == "false_alarm"
+      and sorted(c_bc.get("told", [])) == still_listed
+      and len(r_ids) == 1 and sum(1 for p in pair if not p.get("already")) == 1 and r_status == "SUCCEEDED"
+      and st_bad == 400 and st_key == 403,
+      f"late claim on FALLBACK {e_id}: {l_inc['status']['S']} by {l_inc.get('claimed_by', {}).get('S')}, broadcast {l_bc.get('kind')} told {sorted(l_bc.get('told', []))} vs reached {reached(e_id)}; "
+      f"cancel from FALLBACK {a_id}: {c_inc['status']['S']}, broadcast {c_bc.get('kind')} told {len(c_bc.get('told', []))} vs still listed {len(still_listed)}; "
+      f"two presses at once -> {len(r_ids)} alert ({sum(1 for p in pair if p.get('already'))} joined), {r_status} after cancel; "
+      f"bad body -> {st_bad}, non-ascii key -> {st_key}")
 
 print()
 passed = sum(1 for _, ok in results if ok)

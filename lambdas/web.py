@@ -136,12 +136,13 @@ def location(event):
 
 
 def cancel(event):
-    body = event.get("body") or "{}"
-    if event.get("isBase64Encoded"):
-        body = base64.b64decode(body).decode()
-    body = json.loads(body)
-    incident_id = body.get("incident_id", "")
-    if not incident_id:
+    try:
+        body = event.get("body") or "{}"
+        if event.get("isBase64Encoded"):
+            body = base64.b64decode(body).decode()
+        body = json.loads(body)
+        incident_id = str(body["incident_id"])[:64]
+    except (ValueError, KeyError, TypeError, AttributeError):  # anyone can POST here; a bad body is a 400, not an error
         return jsonr(400, {"error": "incident_id required"})
     if not hers(body):
         return jsonr(403, {"error": "only her page can cancel"})
@@ -161,8 +162,8 @@ def cancel(event):
         if e.response["Error"]["Code"] != "ConditionalCheckFailedException":
             raise
     else:
-        if old["Attributes"]["status"]["S"] == "CLAIMED":
-            # The machine finished when the claim was broadcast; tell everyone directly.
+        if old["Attributes"]["status"]["S"] in ("CLAIMED", "FALLBACK"):
+            # The machine finished when the claim was broadcast, or is past its last wait: tell everyone directly.
             lam.invoke(FunctionName=BROADCAST_FN, InvocationType="RequestResponse",
                        Payload=json.dumps({"kind": "false_alarm", "incident_id": incident_id}).encode())
         else:
@@ -173,7 +174,7 @@ def cancel(event):
 
 def hers(body):
     """The request came from her page: it carries the key rendered into that page alone."""
-    return hmac.compare_digest(str(body.get("key", "")), HER_KEY)
+    return hmac.compare_digest(str(body.get("key", "")).encode(), HER_KEY.encode())
 
 
 def wake(old_row, why):
@@ -224,24 +225,36 @@ def trigger_page():
     running = open_incident()
     if running:  # reopened during an alert: the names are the people this alert reached, not who a press now would page
         names = told_names(running) or names
-    return PAGE.substitute(told=told, disabled=disabled, names_json=json.dumps(names), key_json=json.dumps(HER_KEY),
-                           running_json=json.dumps(running["incident_id"]["S"] if running else None),
-                           strings_json=json.dumps(STRINGS, ensure_ascii=False))
+    return PAGE.substitute(told=told, disabled=disabled, names_json=js(names), key_json=js(HER_KEY),
+                           running_json=js(running["incident_id"]["S"] if running else None),
+                           strings_json=js(STRINGS))
+
+
+def js(obj):
+    """JSON for a <script>: a name or a string can never close the tag."""
+    return json.dumps(obj, ensure_ascii=False).replace("</", "<\\/")
 
 
 RECENT_CLAIM_S = 1800
+YOUNG_PRESS_S = 30  # a pointer to an incident row that does not exist yet is a machine still starting
 
 
-def open_incident():
+def open_incident(subject=None):
     """The alert already running for her, if there is one: OPEN or FALLBACK, or claimed within
     the last half hour - someone is on the way. A second press then returns it instead of
     starting a second alert (a double tap, a reload, the app reopened)."""
-    subject = ddb.get_item(TableName=SUBJECTS, Key={"subject_id": {"S": SUBJECT_ID}}).get("Item", {})
+    if subject is None:
+        subject = ddb.get_item(TableName=SUBJECTS, Key={"subject_id": {"S": SUBJECT_ID}}, ConsistentRead=True).get("Item", {})
     if "open_incident" not in subject:
         return None
     item = ddb.get_item(TableName=INCIDENTS, Key={"incident_id": subject["open_incident"]},
                         ConsistentRead=True).get("Item")
     if item is None:
+        # A press seconds ago: its machine has not written the row yet. That press is the running one.
+        since = int(subject.get("open_since", {}).get("N", "0"))
+        if time.time() - since < YOUNG_PRESS_S:
+            return {"incident_id": subject["open_incident"], "subject_id": {"S": SUBJECT_ID},
+                    "status": {"S": "OPEN"}, "started_at": {"N": str(since)}}
         return None
     status = item["status"]["S"]
     if status in ("OPEN", "FALLBACK"):
@@ -252,7 +265,11 @@ def open_incident():
 
 
 def trigger():
-    running = open_incident()
+    # One read of her row serves both questions: is something running, and what does the row point
+    # at now. The take below is conditioned on that same value, so two presses that both read
+    # "nothing running" in the same instant cannot both start a machine.
+    subject = ddb.get_item(TableName=SUBJECTS, Key={"subject_id": {"S": SUBJECT_ID}}, ConsistentRead=True).get("Item", {})
+    running = open_incident(subject)
     if running is not None:
         print(json.dumps({"component": "web", "event": "trigger_joined", "incident_id": running["incident_id"]["S"]}))
         return jsonr(200, {"incident_id": running["incident_id"]["S"], "told": first_circle_names(), "already": True})
@@ -263,13 +280,33 @@ def trigger():
         "wait_s": WAIT_S,
         "max_tier": MAX_TIER,
     }
-    started = sfn.start_execution(
-        stateMachineArn=STATE_MACHINE_ARN,
-        name=incident_id,
-        input=json.dumps(payload),
-    )
-    ddb.update_item(TableName=SUBJECTS, Key={"subject_id": {"S": SUBJECT_ID}},
-                    UpdateExpression="SET open_incident = :i", ExpressionAttributeValues={":i": {"S": incident_id}})
+    prev = subject.get("open_incident")
+    try:
+        ddb.update_item(TableName=SUBJECTS, Key={"subject_id": {"S": SUBJECT_ID}},
+                        UpdateExpression="SET open_incident = :i, open_since = :now",
+                        ConditionExpression="open_incident = :prev" if prev else "attribute_not_exists(open_incident)",
+                        ExpressionAttributeValues={":i": {"S": incident_id}, ":now": {"N": str(int(time.time()))},
+                                                   **({":prev": prev} if prev else {})})
+    except ClientError as e:
+        if e.response["Error"]["Code"] != "ConditionalCheckFailedException":
+            raise
+        running = open_incident()  # the other press got there first: this one joins it
+        if running is not None:
+            print(json.dumps({"component": "web", "event": "trigger_joined", "incident_id": running["incident_id"]["S"], "raced": True}))
+            return jsonr(200, {"incident_id": running["incident_id"]["S"], "told": first_circle_names(), "already": True})
+        raise
+    try:
+        started = sfn.start_execution(
+            stateMachineArn=STATE_MACHINE_ARN,
+            name=incident_id,
+            input=json.dumps(payload),
+        )
+    except ClientError:
+        # The machine did not start: give her row back so the next press is not told "already running".
+        ddb.update_item(TableName=SUBJECTS, Key={"subject_id": {"S": SUBJECT_ID}},
+                        **({"UpdateExpression": "SET open_incident = :p", "ExpressionAttributeValues": {":p": prev}} if prev
+                           else {"UpdateExpression": "REMOVE open_incident"}))
+        raise
     print(json.dumps({"component": "web", "event": "trigger", "incident_id": incident_id,
                       "execution_arn": started["executionArn"]}))
     return jsonr(200, {"incident_id": incident_id, "told": first_circle_names()})
@@ -329,7 +366,13 @@ def claim(token):
             ReturnValues="ALL_OLD",
         )
         won = True
-        wake(old["Attributes"], "claimed")
+        if old["Attributes"]["status"]["S"] == "FALLBACK":
+            # A late answer after the last circle: the machine has passed its last wait and will not
+            # broadcast this claim, so everyone who was paged is told here who is coming.
+            lam.invoke(FunctionName=BROADCAST_FN, InvocationType="RequestResponse",
+                       Payload=json.dumps({"kind": "someone_going", "incident_id": incident["incident_id"]["S"]}).encode())
+        else:
+            wake(old["Attributes"], "claimed")
     except ClientError as e:
         if e.response["Error"]["Code"] != "ConditionalCheckFailedException":
             raise
@@ -379,8 +422,19 @@ def release(token):
     # stuck alert is worse than a late message - then the people.
     earlier = [r["M"]["contact_id"]["S"] for r in incident.get("releases", {}).get("L", [])]
     told = sorted(reached_ids(incident_id) - {*earlier, note["contact_id"]["S"]})
-    started = sfn.start_execution(stateMachineArn=STATE_MACHINE_ARN, name=f"{incident_id}-r{len(earlier) + 1}",
-                                  input=json.dumps({"incident_id": incident_id, "resumed": True}))
+    try:
+        started = sfn.start_execution(stateMachineArn=STATE_MACHINE_ARN, name=f"{incident_id}-r{len(earlier) + 1}",
+                                      input=json.dumps({"incident_id": incident_id, "resumed": True}))
+    except ClientError:
+        # No machine picked the alert up: put the claim back exactly as it was, so the row is never OPEN
+        # with nobody waiting on it, and let them try again.
+        ddb.update_item(TableName=INCIDENTS, Key={"incident_id": {"S": incident_id}},
+                        UpdateExpression=f"SET #s = :claimed, claimed_by = :me, claimed_by_name = :n, claimed_at = :t "
+                                         f"REMOVE releases[{len(earlier)}]",
+                        ExpressionAttributeNames={"#s": "status"},
+                        ExpressionAttributeValues={":claimed": {"S": "CLAIMED"}, ":me": note["contact_id"],
+                                                   ":n": entry["name"], ":t": entry["claimed_at"]})
+        raise
     lam.invoke(FunctionName=BROADCAST_FN, InvocationType="RequestResponse",
                Payload=json.dumps({"kind": "stepped_back", "incident_id": incident_id, "contacts": told}).encode())
     print(json.dumps({"component": "web", "event": "released", "incident_id": incident_id,
@@ -1046,6 +1100,7 @@ PAGE = Template("""<!doctype html>
           document.getElementById("noone-names").innerHTML = filled;
         }
         if (s.status === "FALLBACK") show("noone");  // everyone on her list has been told, nobody has answered
+        else if (s.status === "FAILED") { show("noone"); stopPoll(); }  // the machine broke: nobody is coming, call 112
         else if (s.stepped_back && s.told) {  // the one who was coming can't after all: the alert is open again
           back = s.stepped_back;
           document.getElementById("sent-back").innerHTML = fill("stepped_back", "name", back);

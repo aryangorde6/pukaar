@@ -75,11 +75,23 @@ def handler(event, context):
     suffix = {"no_one_reached": "F", "stepped_back": "R"}.get(kind)
     if kind == "no_one_reached":
         recipients = list(contacts.values())
-        ddb.update_item(TableName=INCIDENTS, Key={"incident_id": {"S": incident_id}},
-                        UpdateExpression="SET #s = :f, fallback_at = :t",
-                        ConditionExpression="#s = :open",
-                        ExpressionAttributeNames={"#s": "status"},
-                        ExpressionAttributeValues={":f": {"S": "FALLBACK"}, ":open": {"S": "OPEN"}, ":t": {"N": str(now)}})
+        try:
+            ddb.update_item(TableName=INCIDENTS, Key={"incident_id": {"S": incident_id}},
+                            UpdateExpression="SET #s = :f, fallback_at = :t",
+                            ConditionExpression="#s = :open",
+                            ExpressionAttributeNames={"#s": "status"},
+                            ExpressionAttributeValues={":f": {"S": "FALLBACK"}, ":open": {"S": "OPEN"}, ":t": {"N": str(now)}})
+        except ClientError as e:
+            if e.response["Error"]["Code"] != "ConditionalCheckFailedException":
+                raise
+            # The row moved on in the second between CheckClaim's read and this write: someone claimed,
+            # or she cancelled. That is the news to send, not "nobody has gone".
+            moved = ddb.get_item(TableName=INCIDENTS, Key={"incident_id": {"S": incident_id}}, ConsistentRead=True)["Item"]["status"]["S"]
+            print(json.dumps({"component": "broadcast", "kind": kind, "incident_id": incident_id, "event": "moved_on", "status": moved}))
+            instead = {"CLAIMED": "someone_going", "CANCELLED": "false_alarm"}.get(moved)
+            if instead:
+                return handler({**event, "kind": instead}, context)
+            return {**event, "broadcast": {"kind": kind, "told": [], "failed": [], "moved_on": moved}}
     elif kind == "stepped_back":
         # Fixed by the web handler before the machine resumed: the rows may already be moving on.
         recipients = [contacts[c] for c in event["contacts"] if c in contacts]
