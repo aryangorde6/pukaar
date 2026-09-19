@@ -17,6 +17,7 @@ USD_PER_READ_UNIT = 0.0000001425    # AmazonDynamoDB APS3-ReadRequestUnits ($0.1
 USD_PER_EMAIL = 0.00015             # AmazonSES     APS3-Message
 USD_PER_KMS_REQUEST = 0.000003      # awskms        ap-south-1-KMS-Requests ($0.03 per 10,000)
 USD_PER_KMS_KEY_MONTH = 1.0         # awskms        ap-south-1-KMS-Keys
+USD_PER_ALARM_MONTH = 0.10          # AmazonCloudWatch APS3-AlarmMonitorUsage, standard resolution
 USD_PER_GB_MONTH_DDB = 0.285        # AmazonDynamoDB APS3-TimedStorage-ByteHrs
 USD_PER_GB_LOGS = 0.67              # AmazonCloudWatch APS3-DataProcessing-Bytes
 INR_PER_USD = 88                    # assumed, for the rupee column only
@@ -78,11 +79,11 @@ def main():
               f"**{fmt(total)}** (₹{total * INR_PER_USD:.2f}) |")
     print()
     print(f"Idle, per subject per month: {fmt(idle_per_subject_month())}. "
-          f"Fixed, whole system: one KMS key, ${USD_PER_KMS_KEY_MONTH:.2f}/month.")
+          f"Fixed, whole system: one KMS key, ${USD_PER_KMS_KEY_MONTH:.2f}/month, and one CloudWatch alarm, ${USD_PER_ALARM_MONTH:.2f}/month.")
     print(f"The weekly check-in to her six people: {fmt(checkin_per_subject_month())} per subject per month "
           f"(26 emails).")
     first = next(iter(SHAPES.values()))
-    thousand = 1000 * (sum(incident(first).values()) + idle_per_subject_month()) + USD_PER_KMS_KEY_MONTH
+    thousand = 1000 * (sum(incident(first).values()) + idle_per_subject_month()) + USD_PER_KMS_KEY_MONTH + USD_PER_ALARM_MONTH
     with_checkin = thousand + 1000 * checkin_per_subject_month()
     print(f"A thousand people, one incident each a month: about ${thousand:.0f}/month "
           f"(₹{thousand * INR_PER_USD:.0f}); with the weekly check-in, about ${with_checkin:.0f}/month "
