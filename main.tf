@@ -713,7 +713,8 @@ resource "aws_sfn_state_machine" "escalation" {
 # in Done and mails the operator. The Fail state, RecordFailure's row and metric, and
 # this email are three views of the same fact.
 resource "aws_sns_topic" "failures" {
-  name = "${var.prefix}-failures"
+  name         = "${var.prefix}-failures"
+  display_name = "Pukaar" # the From line of the operator's mail
 }
 
 resource "aws_sns_topic_subscription" "operator" {
