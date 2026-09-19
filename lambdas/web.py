@@ -844,7 +844,7 @@ p { margin: 0 0 var(--space-4); }
 .btn-emergency:active { background: var(--emergency-active); }
 .btn { transition: transform 0.06s ease-out, box-shadow 0.06s ease-out; }
 .btn-secondary:active { transform: translateY(2px); }
-.btn-emergency[disabled] { background: var(--border); box-shadow: none; cursor: not-allowed; }
+.btn-emergency[disabled], .btn-safe[disabled] { background: var(--border); box-shadow: none; cursor: not-allowed; }
 main a.btn-emergency { display: flex; align-items: center; justify-content: center; text-align: center;
   text-decoration: none; color: var(--on-emergency); min-height: max(240px, 36vh); line-height: 1.15; padding: var(--space-4); margin: 0; }  /* the tel: rule below would shrink and recolour it */
 .btn-secondary[disabled] { color: var(--ink-muted); cursor: not-allowed; }
@@ -1147,7 +1147,7 @@ CLAIM_ACTIONABLE = Template(_page("Emergency — $name needs help", """
 <p><a class="btn btn-secondary btn-inline" href="$maps_url" target="_blank" rel="noopener">Open in maps</a></p>
 $where
 <p>You are one of <strong>$contacted_count people</strong> contacted.<br><strong>No one has gone yet.</strong></p>
-<form method="post"><button class="btn btn-emergency btn-claim" type="submit">I’m going now</button></form>
+<form method="post" onsubmit="var b=this.querySelector('button');b.disabled=true;b.textContent='Sending…'"><button class="btn btn-emergency btn-claim" type="submit">I’m going now</button></form>
 <p class="muted">Can’t go? That’s alright — $others.</p>
 """))
 
@@ -1234,7 +1234,7 @@ CHECKIN_ASK = Template(_page("Check-in — not an emergency", """
 <h1>$name is fine.</h1>
 <p class="lead">Her help button keeps a list of who is likely to answer at each hour, so that when she does press it, the right three people are called first.</p>
 <p>This is a check-in, $you. <strong>If you could go to her right now</strong>, say so. If not, just close this — that is a useful answer too.</p>
-<form method="post"><button class="btn btn-safe btn-claim" type="submit">I’d be reachable now</button></form>
+<form method="post" onsubmit="var b=this.querySelector('button');b.disabled=true;b.textContent='Sending…'"><button class="btn btn-safe btn-claim" type="submit">I’d be reachable now</button></form>
 <p class="muted">Sent at $sent_at. Nothing else is needed.</p>
 """))
 
