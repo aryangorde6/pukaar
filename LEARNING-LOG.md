@@ -24,43 +24,43 @@ learned during the four days.
 ---
 
 ## 2026-09-17 13:15 IST — a public Function URL that answered 403 to everyone
-Tried:            Serve the help button from a Lambda Function URL with `authorization_type = "NONE"`.
+Tried:            Serve the help button from a Lambda Function URL with `authorization_type = "NONE"`.  
 Broke:            `HTTP/1.1 403 Forbidden` · `x-amzn-ErrorType: AccessDeniedException` ·
                   `{"Message":"Forbidden. For troubleshooting Function URL authorization issues, see:
-                  https://docs.aws.amazon.com/lambda/latest/dg/urls-auth.html"}`, on GET / and POST /trigger.
+                  https://docs.aws.amazon.com/lambda/latest/dg/urls-auth.html"}`, on GET / and POST /trigger.  
 Wrong assumption: That `NONE` means public. It only means Lambda skips IAM authentication; the function's
                   resource policy still decides. I then assumed the missing grant was `lambda:InvokeFunctionUrl`
                   and added it. Still 403. The policy already had that statement (the URL resource adds it).
                   Since October 2025 a public URL also needs `lambda:InvokeFunction`, conditioned on
-                  `lambda:InvokedViaFunctionUrl = true`. That was the one missing.
+                  `lambda:InvokedViaFunctionUrl = true`. That was the one missing.  
 Fix:              fae8b5d — `aws_lambda_permission.web_url_public_invoke` with `invoked_via_function_url = true`.
                   The argument does not exist in AWS provider 5.100, so the provider moved to 6.x (6.65.0);
-                  the plan after the upgrade was the one permission and nothing else.
+                  the plan after the upgrade was the one permission and nothing else.  
 Evidence:         `curl -s -o /dev/null -w "%{http_code}" $URL` → `200`; `aws lambda get-policy` on `pukaar-web`
                   lists `FunctionURLAllowPublicAccess` and `AllowPublicFunctionUrlInvoke`. The docs page's note:
                   *"Starting in October 2025, new function URLs will require both lambda:InvokeFunctionUrl and
                   lambda:InvokeFunction permissions."* The practice stack never had a Function URL.
 
 ## 2026-09-17 13:19 IST — the log's own test was green on nothing and red on the first entry
-Tried:            Run `tests/test_learning_log.py` after writing the entry above.
-Broke:            `AssertionError: 2026-09-17 13:15 is outside Thu Sep 17 13:15:39 2026 .. Sun Sep 20 20:00:00 2026`
+Tried:            Run `tests/test_learning_log.py` after writing the entry above.  
+Broke:            `AssertionError: 2026-09-17 13:15 is outside Thu Sep 17 13:15:39 2026 .. Sun Sep 20 20:00:00 2026`  
 Wrong assumption: That `git log --reverse --format=%cI --max-count=1` prints the first commit. It prints the
                   newest one (`--max-count` is applied before `--reverse`), so the "window" started at the
                   commit I had just made. With zero entries the test had nothing to check and passed anyway;
                   the first real row exposed it. That is the bug class this project audits for (a verdict
-                  from absent evidence), and it was in the auditor.
-Fix:              e166ce0 — `git rev-list --max-parents=0 HEAD` for the root commit, floor truncated to the minute.
+                  from absent evidence), and it was in the auditor.  
+Fix:              e166ce0 — `git rev-list --max-parents=0 HEAD` for the root commit, floor truncated to the minute.  
 Evidence:         `4 passed`; the root commit is `271deb7 2026-09-17T12:56:53+05:30`, the entry above is 13:15.
 
 ## 2026-09-17 13:52 IST — the wait was a timer, so "immediate" was a tier late
 Tried:            The spine as designed: `WaitForClaim` as a `Wait` state with `SecondsPath`, then `CheckClaim` polls the
-                  row. It worked, and it was what the practice stack ran. Then I measured it.
+                  row. It worked, and it was what the practice stack ran. Then I measured it.  
 Broke:            Nothing threw. Execution `t4c-133806`: `WaitForClaim` entered 13:38:09.250, `POST /cancel` landed at
                   13:38:14.124, the `Cancelled` state (the one that tells the neighbours it was a false alarm) was
                   entered at 13:38:29.548. **15.4 s** after she pressed cancel, on a 20 s test timer; on the 60 s
                   production timer that is anything up to a minute of three people getting ready to walk over.
                   Correctness property 3 in the design says *immediate*. The machine could not know the row had
-                  changed until its timer ran out.
+                  changed until its timer ran out.  
 Wrong assumption: That a Wait + poll was "immediate enough" because the poll is right after the wait. It is
                   immediate only at the tier boundary. The fix is the one Step Functions feature the practice
                   stack never used, `.waitForTaskToken`, and I did not know, before today, that it composes with
@@ -68,10 +68,10 @@ Wrong assumption: That a Wait + poll was "immediate enough" because the poll is 
                   (`status = OPEN`), `TimeoutSecondsPath` keeps the tier timeout as an input, and the two exits
                   (`States.Timeout`, `DynamoDb.ConditionalCheckFailedException`) are caught ahead of `States.ALL`
                   into the same `CheckClaim`. I also assumed a stale token would raise `InvalidToken`; it raises
-                  `TaskTimedOut` (from the log: `{"event": "wake_skipped", "error": "TaskTimedOut"}`).
+                  `TaskTimedOut` (from the log: `{"event": "wake_skipped", "error": "TaskTimedOut"}`).  
 Fix:              9a1cf95 — `WaitForClaim` is now `arn:aws:states:::aws-sdk:dynamodb:updateItem.waitForTaskToken`;
                   the claim's and the cancel's conditional `UpdateItem` use `ReturnValues=ALL_OLD` so the token comes
-                  back in the same write that won the race, and `SendTaskSuccess` is best-effort.
+                  back in the same write that won the race, and `SendTaskSuccess` is best-effort.  
 Evidence:         Same test, after: cancel → `Cancelled` entered **1.0 s** later; claim → `BroadcastClaim` done in
                   **2.8 s** including the three emails (`t27-claim-*`, `t27-cancel-*`). Timeout path still widens
                   (`t27a-134849`: `TaskTimedOut States.Timeout` at +5.07 s, then `FinalFallback`). `./verify.sh`
@@ -80,21 +80,21 @@ Evidence:         Same test, after: cancel → `Cancelled` entered **1.0 s** lat
 
 ## 2026-09-17 18:00 IST — one ignored page erased five answered ones
 Tried:            Availability ranking. First version: use the response history for *this hour bucket* if
-                  the person has ever been paged in it, else their history at any hour, else a declared prior.
+                  the person has ever been paged in it, else their history at any hour, else a declared prior.  
 Broke:            Nothing threw. The first live run after deploy (`931591413163`, 17:56, bucket `17#weekday`)
                   paged Vaishali, Ravi and Anil and wrote one page each into `17#weekday`; Ravi claimed. The
                   next run two minutes later (`v-175839-*`) chose tier 1 = `['ravi', 'sunil', 'prakash']`:
                   Vaishali (seeded 5/5 at 2 pm, 40 m away) was now "0/1 this hour" and lost to two people
                   with no history at all. `verify.sh` still said 8/8, because check 7 only asked that the
-                  nearest non-answerer stay out of tier 1.
+                  nearest non-answerer stay out of tier 1.  
 Wrong assumption: That evidence from the same hour is always better than evidence from any hour. One page is
                   not evidence of anything; a cliff between "this hour" and "any hour" let a single unanswered
                   page outrank a whole history. And a passing check that never asked whether the best answerer
-                  was paged is the 4.7b bug class again: a verdict from absent evidence.
+                  was paged is the 4.7b bug class again: a verdict from absent evidence.  
 Fix:              6eb8ad0 — pooled counts with a prior worth two pages (one answered if usually home, half if not);
                   this hour's pages count twice, so the hour matters without deciding alone. Check 7 now also
                   requires the best seeded answerer in tier 1; `verify.sh` reseeds first, because the ranking
-                  learns from the checks' own unanswered pages. `test_one_unanswered_page_does_not_erase_history`.
+                  learns from the checks' own unanswered pages. `test_one_unanswered_page_does_not_erase_history`.  
 Evidence:         Same shape, after: 5/5 plus one ignored page this hour scores 0.661 against an unknown's 0.525
                   (unit test). Live `v-180259-fanout`: tier 1 `['vaishali', 'ravi', 'anil']` vs nearest three
                   `['meena', 'vaishali', 'anil']`; SelectTier's log line carries every score and its basis
@@ -102,17 +102,17 @@ Evidence:         Same shape, after: 5/5 plus one ignored page this hour scores 
 
 ## 2026-09-17 18:18 IST — the Cancel button on "Ravi is coming" did nothing
 Tried:            The UI pass, walking her screens on a phone-sized viewport with a real claimed incident
-                  (`2d328bcc7fa1`, Ravi claimed at 6:17 pm).
+                  (`2d328bcc7fa1`, Ravi claimed at 6:17 pm).  
 Broke:            `POST /cancel {"incident_id": "2d328bcc7fa1"}` → `{"status": "CLAIMED", ...}`. No error, no
                   change. The *Coming* screen shows **Cancel — I'm OK** ("she may be fine after all, and she is
-                  allowed to say so"), and pressing it left the row `CLAIMED` and nobody told.
+                  allowed to say so"), and pressing it left the row `CLAIMED` and nobody told.  
 Wrong assumption: That a cancel only matters before anyone claims. The conditional write accepted `OPEN` and
                   `FALLBACK` only, and by the time someone has claimed the machine has already broadcast and
                   finished; there is no parked token to wake, so even widening the condition would have
-                  changed the row and told no one. The button was shipped from the copy without a path behind it.
+                  changed the row and told no one. The button was shipped from the copy without a path behind it.  
 Fix:              4ebb86b — cancel accepts `CLAIMED`; when the old status was `CLAIMED` the web function invokes
                   `pukaar-broadcast` (`kind = false_alarm`) directly instead of waking the machine. The web role
-                  gains `lambda:InvokeFunction` on that one function and still cannot send mail itself.
+                  gains `lambda:InvokeFunction` on that one function and still cannot send mail itself.  
 Evidence:         Same incident, after: `{"status": "CANCELLED", ..., "cancelled_at": "6:20 pm"}`; the row's
                   `broadcast` = `{"kind": "false_alarm", "told": ["vaishali", "anil", "ravi"]}`; Ravi's claim link
                   now renders "Sunita cancelled this alert" with no record. `./verify.sh` check 11, 11/11
@@ -120,24 +120,24 @@ Evidence:         Same incident, after: `{"status": "CANCELLED", ..., "cancelled
 
 ## 2026-09-17 23:10 IST — reseeding before the checks protected the checks, not the button
 Tried:            The cold re-read of the README against the live stack, claim by claim. Line 23 quotes her
-                  screen: *"Vaishali, Ravi and Anil will be told straight away"*.
+                  screen: *"Vaishali, Ravi and Anil will be told straight away"*.  
 Broke:            The live page read *"Vaishali, Anil and Ravi"*: same circle, Anil above Ravi. Earlier in the
                   evening, twice, it had read *"Vaishali, Sunil and Ravi"*: Anil out altogether. Nothing
                   threw; `verify.sh` was 11/11 twenty minutes before. `pukaar-response-stats` held the pages
                   the last run had sent and nobody had answered: `ravi 22#weekday 5/0`, `anil 22#weekday 3/0`,
-                  plus the `verify` rows, next to the three seeded ones.
+                  plus the `verify` rows, next to the three seeded ones.  
 Wrong assumption: That reseeding *before* a run was the whole fix (entry 18:00). It gives the checks a known
                   history; it does nothing for what the checks leave behind. The ranking learns from every page
                   and the checks' pages are the last thing written, so from the end of a run until the next
                   reseed the live button (the thing a judge opens) ranked on test pages. The README quotes a
-                  sentence the button was not showing.
+                  sentence the button was not showing.  
 Fix:              f6512d6 — `verify.sh` reseeds after the checks as well as before, whatever the exit code, so a
                   run leaves the circle as seeded. Manual presses and screenshot incidents still leave their
                   pages behind; the rule for those stays `./seed.sh` before every take and every idle look.
                   The same commit fixes `verify.sh`'s header ("eight" checks; there are eleven), states the
                   contrast floor as the computed minimum (7.28:1 → "7:1, the AAA line"), and notes in the
                   README that the ranking table's scores are the off-hour ones and that a reseed deletes the
-                  counters written since.
+                  counters written since.  
 Evidence:         Before: `aws dynamodb scan --table-name pukaar-response-stats` → 11 rows, and `curl` of the
                   Function URL → "Vaishali, Anil and Ravi will be told straight away". After `./verify.sh`
                   (11/11, `v-230629-*`): the scan → exactly the three seeded rows (`vaishali 14#weekday 5/5`,
@@ -145,26 +145,26 @@ Evidence:         Before: `aws dynamodb scan --table-name pukaar-response-stats`
 ## 2026-09-18 19:41 IST — the incident id was all a cancel needed, and the timeline had just put it in every inbox
 Tried:            Choosing the next thing to build after `5dad4c2`, which had added *What happened, in order:
                   …/incident/<id>* to the two messages that ask nothing of anyone (*Ravi is going*, *False
-                  alarm*), on email and Telegram, so a family could follow an alert without opening a link.
+                  alarm*), on email and Telegram, so a family could follow an alert without opening a link.  
 Broke:            Nothing threw, and 18/18 was green. `POST /cancel {"incident_id"}` and `POST /location
                   {"incident_id", lat, lon}` asked for the id and nothing else, and the id was now in the
                   inbox of everyone reached, on Telegram, and on every settled claim page since the timeline
                   shipped (`573494d`). Anyone paged could call off her alert (six *False alarm* messages, her
                   screen *Cancelled*) or move her phone's position to a spot of their choosing while
                   responders were reading it. Reproduced: `curl -X POST …/cancel -d '{"incident_id":"…"}'`
-                  → `200 {"status": "CANCELLED"}` from a shell that had never seen her page.
+                  → `200 {"status": "CANCELLED"}` from a shell that had never seen her page.  
 Wrong assumption: That an id safe to *read* by (`GET /status/<id>`, `GET /incident/<id>`) was safe to *act*
                   by. Her page had been the only thing that knew the id, so the id stood in for her page; the
                   moment the id was shared for reading, the writes it guarded were shared too. The README's
                   "the links are one-time, per incident, per person" described the responders' side only;
-                  her side had no credential at all beyond the URL of the button.
+                  her side had no credential at all beyond the URL of the button.  
 Fix:              0dac038 — a `random_password` in Terraform, `HER_KEY` in the web function's environment,
                   rendered into her page's script and nowhere else; `/cancel` and `/location` refuse a body
                   without it (403, `hmac.compare_digest`), before any write. The boundary is now stated in the
                   README: her page cancels and places her; a responder's link claims, steps back, leaves; a
                   timeline id reads. Check 6 cancels first without the key (403, row still OPEN), check 16
                   sends a position without it (403, nothing written); `verify.sh` and `shoot.sh` read the key
-                  from `terraform output`.
+                  from `terraform output`.  
 Evidence:         `curl -X POST …/cancel -d '{"incident_id":"019d22d6b6e2"}'` → `403 {"error": "only her page
                   can cancel"}`; the same with `"key":"x"` → 403; `…/location` without it → `403 {"error":
                   "only her page can say where she is"}`; `curl …/` → `var key = "` once. A press and a
@@ -174,22 +174,22 @@ Evidence:         `curl -X POST …/cancel -d '{"incident_id":"019d22d6b6e2"}'` 
 ## 2026-09-19 01:05 IST — "refreshing itself" meant a meta refresh, and axe calls that critical
 Tried:            An accessibility pass on every page a person can open, with axe-core 4.10.2 loaded into
                   the live pages from the browser, every rule set it has including best-practice; the README
-                  now states the page's design rules, so each one should survive a tool.
+                  now states the page's design rules, so each one should survive a tool.  
 Broke:            Her page: `region [moderate]: .foot`. The *Not working? Call 112* line sat outside any
                   landmark, and the responder pages had no landmark at all (`<body>` → content → `.foot`).
                   The timeline: `meta-refresh [critical]: meta[http-equiv="refresh"]`. The page reloaded
                   itself every five seconds while the alert was open, which throws a screen reader back to
                   the top each time (WCAG 2.2.1 / 3.2.5). It also stopped one refresh too early: the row
                   closes on the claim or the cancel, and the line *everyone was told* is written a second or
-                  two later, so the last thing the open page ever showed was one line short.
+                  two later, so the last thing the open page ever showed was one line short.  
 Wrong assumption: That "the page refreshes itself" was a harmless way to keep a timeline live, and that
                   landmarks were a formality on a one-screen page. A reload is a navigation; for someone
                   listening to the page rather than looking at it, it is the whole page again, every five
-                  seconds, for as long as the alert runs.
+                  seconds, for as long as the alert runs.  
 Fix:              750968b — `<header>`, `<main>`, `<footer>` on every page (`_page`, her page, the 404); the
                   timeline fetches itself every 5 s and appends only the lines it does not have (the card
                   and the list are `aria-live="polite"`), stops when the row settles, and takes one last look
-                  5 s later for the broadcast line.
+                  5 s later for the broadcast line.  
 Evidence:         Same document, no reload: a marker set on `window` at load survived a claim: three lines
                   appended, the card flipped to *✓ Ravi went*; and survived a cancel on a second alert; the
                   false-alarm line landed on the last look (`shot-010403-axe`, `shot-011028-axe2`). axe after
@@ -200,21 +200,21 @@ Evidence:         Same document, no reload: a marker set on `window` at load sur
 ## 2026-09-19 12:48 IST — her screen, reopened during an alert, named a man who was never told
 Tried:            Screenshots of her page through one real alert for the README, the one set of screens
                   it did not have: after the press, when someone answers. Each taken by opening the page
-                  fresh while the alert ran, as she would if she put the phone down and picked it up.
+                  fresh while the alert ran, as she would if she put the phone down and picked it up.  
 Broke:            Her page said **Vaishali, Sunil, Ravi and Anil have been told.** The alert `d05a6e6338ce`
                   had three delivered rows: `anil#1`, `ravi#1`, `vaishali#1`. Sunil was never paged.
                   (`docs/evidence-12-37-four-names.png`; `aws dynamodb query --table-name pukaar-notifications
-                  --key-condition-expression 'incident_id = :i'` → three rows, none for sunil.)
+                  --key-condition-expression 'incident_id = :i'` → three rows, none for sunil.)  
 Wrong assumption: That "who a press right now would page" is the same list as "who this alert paged", so
                   the reopened page could start from the ranking and let the poll add names. It is never the
                   same list once the alert has started: the ranking learns from every page, so the three who
                   were just paged and have not answered drop, Sunil rises, and the page opened on
                   *Vaishali, Sunil, Ravi* and then unioned the row's *Vaishali, Ravi, Anil*. Check 15 opened
-                  the page too, before the rows had landed, so it never saw the difference.
+                  the page too, before the rows had landed, so it never saw the difference.  
 Fix:              821a19e — reopened during an alert, `trigger_page` starts from `told_names(running)`
                   (the delivered rows, minus anyone who stepped back), falling back to the ranking only
                   while no row exists yet. Check 15 now waits for the rows and asserts the page's names
-                  equal the reached set exactly, no more, no fewer.
+                  equal the reached set exactly, no more, no fewer.  
 Evidence:         Same alert shape after the fix (`8ed1e8d50174`): *Anil, Ravi and Vaishali have been told*
                   (`docs/11-help-is-being-called.png`), three rows, three names. `./verify.sh` 19/19,
                   `v-124207-*`: check 15 "names ['Anil', 'Ravi', 'Vaishali'] vs reached ['Anil', 'Ravi',
