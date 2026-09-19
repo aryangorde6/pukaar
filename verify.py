@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Nineteen checks against the live stack. Each asserts on rows and execution history,
+"""Twenty checks against the live stack. Each asserts on rows and execution history,
 never on a status code alone - SUCCEEDED with nothing in the tables is a failure.
 
 Every check requires something positive to exist. A check that would pass against
@@ -27,6 +27,7 @@ SM = out["state_machine_arn"]["value"]
 URL = out["web_url"]["value"]
 TABLES = {name.split("-", 1)[1]: name for name in out["tables"]["value"]}
 HER_KEY = out["her_key"]["value"]  # what her page carries; a cancel or a position needs it
+SENDER = out["sender"]["value"]  # "Pukaar <alert@domain>"; the identity whose default configuration set every page carries
 
 sfn = boto3.client("stepfunctions", region_name=REGION)
 ddb = boto3.client("dynamodb", region_name=REGION)
@@ -34,6 +35,7 @@ lam = boto3.client("lambda", region_name=REGION)
 kms = boto3.client("kms", region_name=REGION)
 logs = boto3.client("logs", region_name=REGION)
 cw = boto3.client("cloudwatch", region_name=REGION)
+ses = boto3.client("sesv2", region_name=REGION)
 PREFIX = out["tables"]["value"][0].split("-", 1)[0]
 RUN = time.strftime("%H%M%S")
 T0 = time.time()
@@ -498,6 +500,40 @@ check("19 a broken escalation fails loudly and the operator is told",
       and "nobody to page" in f_why and "failed_at" in f_inc and counted >= 1 and told >= 1 and mailed >= 1,
       f"execution {f_status}, states {f_states}; row {f_inc['status']['S']}, why: {f_why[f_why.find('errorMessage'):][:60]}; "
       f"EscalationFailed metric {counted:.0f}, rule invoked {told:.0f}, SNS published {mailed:.0f}")
+
+# 20. the rails around the record, and the two failures the machine cannot see. Every table
+# restores to any second of the last 35 days and refuses deletion; no execution outlives an
+# hour; her button's own Lambda erroring, and a page that bounces, reach the operator's topic.
+# The last two are done, not read: one page to SES's bounce simulator, sent without naming a
+# configuration set (the identity's default carries it, as it does for every real page), and
+# the alarm forced into ALARM once. Both must show up as messages published on the topic.
+topic = f"{PREFIX}-failures"
+backups = {t: ddb.describe_continuous_backups(TableName=t)["ContinuousBackupsDescription"]
+           ["PointInTimeRecoveryDescription"]["PointInTimeRecoveryStatus"] for t in TABLES.values()}
+guarded = {t: ddb.describe_table(TableName=t)["Table"].get("DeletionProtectionEnabled", False) for t in TABLES.values()}
+cap = json.loads(sfn.describe_state_machine(stateMachineArn=SM)["definition"]).get("TimeoutSeconds")
+alarm = cw.describe_alarms(AlarmNames=[f"{PREFIX}-web-errors"])["MetricAlarms"]
+alarm_topic = bool(alarm) and any(a.endswith(f":{topic}") for a in alarm[0]["AlarmActions"])
+domain = SENDER.rsplit("@", 1)[1].rstrip(">")
+default_set = ses.get_email_identity(EmailIdentity=domain).get("ConfigurationSetName")
+bounce_dest = [d for d in ses.get_configuration_set_event_destinations(ConfigurationSetName=PREFIX)["EventDestinations"]
+               if d["Enabled"] and "BOUNCE" in d["MatchingEventTypes"] and d.get("SnsDestination", {}).get("TopicArn", "").endswith(f":{topic}")]
+ses.send_email(FromEmailAddress=SENDER, Destination={"ToAddresses": ["bounce@simulator.amazonses.com"]},
+               Content={"Simple": {"Subject": {"Data": f"Pukaar check 20 {RUN}"},
+                                   "Body": {"Text": {"Data": "A page to an address that bounces. The operator should hear."}}}})
+cw.set_alarm_state(AlarmName=f"{PREFIX}-web-errors", StateValue="ALARM", StateReason=f"verify.py {RUN}: the alarm's mail must reach the operator")
+for _ in range(15):
+    bounced = metric_sum("AWS/SES", "Bounce", [{"Name": "ses:configuration-set", "Value": PREFIX}])
+    published = metric_sum("AWS/SNS", "NumberOfMessagesPublished", [{"Name": "TopicName", "Value": topic}])
+    if bounced >= 1 and published >= mailed + 2:
+        break
+    time.sleep(10)
+check("20 the rails hold: backups, no deletion, an hour's cap, a bounce and a failing button reach the operator",
+      all(v == "ENABLED" for v in backups.values()) and all(guarded.values()) and cap == 3600 and alarm_topic
+      and default_set == PREFIX and len(bounce_dest) == 1 and bounced >= 1 and published >= mailed + 2,
+      f"PITR {sum(v == 'ENABLED' for v in backups.values())}/5, deletion protection {sum(guarded.values())}/5, "
+      f"machine TimeoutSeconds {cap}; alarm -> topic {alarm_topic}; {domain} default set {default_set!r}, bounce -> topic {len(bounce_dest)}; "
+      f"SES Bounce {bounced:.0f}, topic published {published:.0f} (was {mailed:.0f})")
 
 print()
 passed = sum(1 for _, ok in results if ok)

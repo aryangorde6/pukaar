@@ -50,10 +50,15 @@ locals {
 
 # --- Tables ------------------------------------------------------------------
 
+# Every table can be restored to any second of the last 35 days, and none can be dropped
+# by a destroy or a console click until that flag is turned off first. The record is the
+# product; the rails are cheap.
 resource "aws_dynamodb_table" "incidents" {
   name         = "${var.prefix}-incidents"
   billing_mode = "PAY_PER_REQUEST"
-  hash_key     = "incident_id"
+  point_in_time_recovery { enabled = true }
+  deletion_protection_enabled = true
+  hash_key                    = "incident_id"
 
   attribute {
     name = "incident_id"
@@ -64,7 +69,9 @@ resource "aws_dynamodb_table" "incidents" {
 resource "aws_dynamodb_table" "subjects" {
   name         = "${var.prefix}-subjects"
   billing_mode = "PAY_PER_REQUEST"
-  hash_key     = "subject_id"
+  point_in_time_recovery { enabled = true }
+  deletion_protection_enabled = true
+  hash_key                    = "subject_id"
 
   attribute {
     name = "subject_id"
@@ -75,8 +82,10 @@ resource "aws_dynamodb_table" "subjects" {
 resource "aws_dynamodb_table" "contacts" {
   name         = "${var.prefix}-contacts"
   billing_mode = "PAY_PER_REQUEST"
-  hash_key     = "subject_id"
-  range_key    = "contact_id"
+  point_in_time_recovery { enabled = true }
+  deletion_protection_enabled = true
+  hash_key                    = "subject_id"
+  range_key                   = "contact_id"
 
   attribute {
     name = "subject_id"
@@ -92,8 +101,10 @@ resource "aws_dynamodb_table" "contacts" {
 resource "aws_dynamodb_table" "notifications" {
   name         = "${var.prefix}-notifications"
   billing_mode = "PAY_PER_REQUEST"
-  hash_key     = "incident_id"
-  range_key    = "contact_tier"
+  point_in_time_recovery { enabled = true }
+  deletion_protection_enabled = true
+  hash_key                    = "incident_id"
+  range_key                   = "contact_tier"
 
   attribute {
     name = "incident_id"
@@ -120,8 +131,10 @@ resource "aws_dynamodb_table" "notifications" {
 resource "aws_dynamodb_table" "response_stats" {
   name         = "${var.prefix}-response-stats"
   billing_mode = "PAY_PER_REQUEST"
-  hash_key     = "contact_id"
-  range_key    = "bucket"
+  point_in_time_recovery { enabled = true }
+  deletion_protection_enabled = true
+  hash_key                    = "contact_id"
+  range_key                   = "bucket"
 
   attribute {
     name = "contact_id"
@@ -189,8 +202,11 @@ data "aws_iam_policy_document" "lambda" {
   }
 
   statement {
-    actions   = ["ses:SendEmail", "ses:SendRawEmail"]
-    resources = ["arn:aws:ses:${var.region}:${data.aws_caller_identity.current.account_id}:identity/${var.sender_domain}"]
+    actions = ["ses:SendEmail", "ses:SendRawEmail"]
+    resources = [
+      "arn:aws:ses:${var.region}:${data.aws_caller_identity.current.account_id}:identity/${var.sender_domain}",
+      aws_sesv2_configuration_set.pages.arn, # the identity's default set rides on every send, so SES authorises it too
+    ]
   }
 
   statement {
@@ -489,6 +505,9 @@ resource "aws_sfn_state_machine" "escalation" {
   definition = jsonencode({
     Comment = "One press: open the incident, wait for someone to say they are going, decide."
     StartAt = "Start"
+    # A real alert ends in minutes (three circles of wait_s). Nothing may wait forever: a
+    # timed-out execution is one of the endings the rule below mails the operator about.
+    TimeoutSeconds = 3600
     States = {
       # A fresh press opens a row. A resumed alert - the one who said they were going
       # stepped back - already has one: pick it up at the circle it had reached.
@@ -728,13 +747,32 @@ resource "aws_sns_topic_policy" "failures" {
   arn = aws_sns_topic.failures.arn
   policy = jsonencode({
     Version = "2012-10-17"
-    Statement = [{
-      Effect    = "Allow"
-      Principal = { Service = "events.amazonaws.com" }
-      Action    = "sns:Publish"
-      Resource  = aws_sns_topic.failures.arn
-      Condition = { ArnEquals = { "aws:SourceArn" = aws_cloudwatch_event_rule.failed.arn } }
-    }]
+    Statement = [
+      {
+        Sid       = "EventBridge"
+        Effect    = "Allow"
+        Principal = { Service = "events.amazonaws.com" }
+        Action    = "sns:Publish"
+        Resource  = aws_sns_topic.failures.arn
+        Condition = { ArnEquals = { "aws:SourceArn" = aws_cloudwatch_event_rule.failed.arn } }
+      },
+      {
+        Sid       = "CloudWatch"
+        Effect    = "Allow"
+        Principal = { Service = "cloudwatch.amazonaws.com" }
+        Action    = "sns:Publish"
+        Resource  = aws_sns_topic.failures.arn
+        Condition = { ArnEquals = { "aws:SourceArn" = aws_cloudwatch_metric_alarm.web_errors.arn } }
+      },
+      {
+        Sid       = "SES"
+        Effect    = "Allow"
+        Principal = { Service = "ses.amazonaws.com" }
+        Action    = "sns:Publish"
+        Resource  = aws_sns_topic.failures.arn
+        Condition = { StringEquals = { "aws:SourceAccount" = data.aws_caller_identity.current.account_id } }
+      },
+    ]
   })
 }
 
@@ -757,6 +795,65 @@ resource "aws_cloudwatch_event_target" "failed" {
   input_transformer {
     input_paths    = { name = "$.detail.name", status = "$.detail.status" }
     input_template = "\"Pukaar: escalation <name> ended <status>. Nobody was told that nobody is coming. The incident row carries the reason; the execution history the state it stopped in.\""
+  }
+}
+
+# Two failures the machine cannot see, because they happen before or beside it, reach the
+# same topic. Her button's own Lambda returning errors: a CloudWatch alarm, five-minute
+# window. A page that bounces or is marked as spam: SES events on the sending identity.
+resource "aws_cloudwatch_metric_alarm" "web_errors" {
+  alarm_name          = "${var.prefix}-web-errors"
+  alarm_description   = "pukaar-web returned errors in the last five minutes. Her button may not be working."
+  namespace           = "AWS/Lambda"
+  metric_name         = "Errors"
+  dimensions          = { FunctionName = aws_lambda_function.web.function_name }
+  statistic           = "Sum"
+  period              = 300
+  evaluation_periods  = 1
+  threshold           = 1
+  comparison_operator = "GreaterThanOrEqualToThreshold"
+  treat_missing_data  = "notBreaching"
+  alarm_actions       = [aws_sns_topic.failures.arn]
+  ok_actions          = [aws_sns_topic.failures.arn]
+}
+
+resource "aws_sesv2_configuration_set" "pages" {
+  configuration_set_name = var.prefix
+}
+
+# The sending identity was verified before the event (DNS); it is in Terraform so the
+# configuration set below is its default and every page carries it without a code change.
+resource "aws_sesv2_email_identity" "sender" {
+  email_identity         = var.sender_domain
+  configuration_set_name = aws_sesv2_configuration_set.pages.configuration_set_name
+}
+
+resource "aws_sesv2_configuration_set_event_destination" "operator" {
+  configuration_set_name = aws_sesv2_configuration_set.pages.configuration_set_name
+  event_destination_name = "operator"
+  depends_on             = [aws_sns_topic_policy.failures] # SES checks the topic's policy when the destination is created
+  event_destination {
+    enabled              = true
+    matching_event_types = ["BOUNCE", "COMPLAINT", "REJECT"]
+    sns_destination {
+      topic_arn = aws_sns_topic.failures.arn
+    }
+  }
+}
+
+resource "aws_sesv2_configuration_set_event_destination" "metrics" {
+  configuration_set_name = aws_sesv2_configuration_set.pages.configuration_set_name
+  event_destination_name = "metrics"
+  event_destination {
+    enabled              = true
+    matching_event_types = ["SEND", "DELIVERY", "BOUNCE", "COMPLAINT", "REJECT"]
+    cloud_watch_destination {
+      dimension_configuration {
+        dimension_name          = "ses:configuration-set"
+        default_dimension_value = var.prefix
+        dimension_value_source  = "MESSAGE_TAG"
+      }
+    }
   }
 }
 
@@ -783,6 +880,10 @@ output "create_incident_fn" {
 moved {
   from = aws_lambda_function.fn["web"]
   to   = aws_lambda_function.web
+}
+
+output "sender" {
+  value = var.sender # verify.py sends one page to the SES bounce simulator from it
 }
 
 output "record_key" {
