@@ -2,6 +2,21 @@
 
 **One press. The three people most likely to answer are paged in the same instant; the first to say "I'm going" wins; everyone else is told who is coming; if nobody answers in a minute the circle widens.** An older person living alone should not have to work through a phone list while she is on the floor.
 
+<table>
+<tr>
+<td width="33%" align="center"><img src="docs/01-her-button.png" width="78%" alt="Her screen: one button, I NEED HELP, and who will be told"></td>
+<td width="33%" align="center"><img src="docs/11-help-is-being-called.png" width="78%" alt="Her screen after the press: Help is being called, Anil, Ravi and Vaishali have been told, 1:12 pm, Waiting for one of them to answer, Cancel — I'm OK"></td>
+<td width="33%" align="center"><img src="docs/12-ravi-is-coming.png" width="78%" alt="Her screen when someone answers: Ravi is coming, On the way now, Ravi has your medical notes"></td>
+</tr>
+<tr>
+<td align="center"><sub><b>Her screen.</b> One button, and who will be told is already on it.</sub></td>
+<td align="center"><sub><b>After the press.</b> Who has been told, the time, and one thing to do: <i>Cancel — I'm OK</i>.</sub></td>
+<td align="center"><sub><b>When someone answers.</b> <i>Ravi is coming</i> — by name, the moment the row changes; the phone says it aloud.</sub></td>
+</tr>
+</table>
+
+*Her screen before, during and after a press — one real alert on the live stack, 19 Sep 13:12. Ten more screens, the helpers' pages and the timeline, are under [What happens when she presses](#what-happens-when-she-presses).*
+
 - **The one design decision:** the escalation is a Step Functions state machine, not a loop in a server. A parallel `Map` pages a whole circle at once, a conditional DynamoDB write decides the race between answerers, and the machine *waits for a task token* — a claim or a cancel wakes it in about a second instead of at the next timer.
 - **What an incident costs:** about **$0.0014 (₹0.12)** when the son answers from the first circle, **$0.0039 (₹0.35)** when nobody answers and it widens to everyone. Idle is a fraction of a cent per person per month plus one $1/month key; a thousand people with one incident each come to about $6/month, $10 with the weekly check-in. Numbers from [`cost.py`](cost.py), list prices, counted off real executions.
 - **Live:** https://jseoe3z3uew46fyd6zbceyry6u0ebdgt.lambda-url.ap-south-1.on.aws/ — pressing it pages six test mailboxes and one Telegram, all mine.
@@ -38,16 +53,6 @@ What that changes, measured on a real press (19 Sep, execution `cfe0c80f32e4`, t
 
 <table>
 <tr>
-<td width="33%" align="center"><img src="docs/01-her-button.png" alt="Her screen: one button, I NEED HELP, and who will be told"></td>
-<td width="33%" align="center"><img src="docs/11-help-is-being-called.png" alt="Her screen after the press: Help is being called, Anil, Ravi and Vaishali have been told, 12:44 pm, Waiting for one of them to answer, Cancel — I'm OK"></td>
-<td width="33%" align="center"><img src="docs/12-ravi-is-coming.png" alt="Her screen when someone answers: Ravi is coming, On the way now, Ravi has your medical notes"></td>
-</tr>
-<tr>
-<td align="center"><sub><b>Her screen.</b> One button, and who will be told is already on it.</sub></td>
-<td align="center"><sub><b>After the press.</b> Who has been told, the time, and one thing to do: <i>Cancel — I'm OK</i>.</sub></td>
-<td align="center"><sub><b>When someone answers.</b> <i>Ravi is coming</i> — by name, the moment the row changes; the phone says it aloud.</sub></td>
-</tr>
-<tr>
 <td width="33%" align="center"><img src="docs/02-the-alert.png" alt="The alert a contact opens: EMERGENCY, her name, address, Open in maps, where her phone is, I'm going now"></td>
 <td width="33%" align="center"><img src="docs/03-youre-going.png" alt="After claiming: You're going, the address, her sealed medical notes, and I can't go after all"></td>
 <td width="33%" align="center"><img src="docs/04-already-on-the-way.png" alt="The loser of the race: Ravi is already on the way"></td>
@@ -83,7 +88,7 @@ What that changes, measured on a real press (19 Sep, execution `cfe0c80f32e4`, t
   <sub><b>One alert, in order.</b> Every line a row this system wrote, nothing inferred.</sub>
 </p>
 
-*All thirteen from real alerts on the live stack, 19 Sep 13:04–13:14 — two presses, one claimed, released and cancelled, one nobody answered — taken the way she and they would open the pages.*
+*All thirteen screens in this README — the three at the top and these ten — are from real alerts on the live stack, 19 Sep 13:04–13:14: two presses, one claimed, released and cancelled, one nobody answered; taken the way she and they would open the pages.*
 
 ### Design — the rules the screens follow
 
