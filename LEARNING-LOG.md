@@ -197,17 +197,41 @@ Evidence:         Same document, no reload: a marker set on `window` at load sur
                   the way*, *cancelled*, the check-in ask and counted pages, the leave page, the timeline open /
                   claimed / cancelled, the 404. `./verify.sh` 18/18, `v-011325-*`.
 
+## 2026-09-19 12:50 IST — her screen, reopened during an alert, named a man who was never told
+Tried:            Screenshots of her page through one real alert for the README — the one set of screens
+                  it did not have: after the press, when someone answers. Each taken by opening the page
+                  fresh while the alert ran, as she would if she put the phone down and picked it up.
+Broke:            Her page said **Vaishali, Sunil, Ravi and Anil have been told.** The alert `d05a6e6338ce`
+                  had three delivered rows: `anil#1`, `ravi#1`, `vaishali#1`. Sunil was never paged.
+                  (`docs/evidence-12-37-four-names.png`; `aws dynamodb query --table-name pukaar-notifications
+                  --key-condition-expression 'incident_id = :i'` → three rows, none for sunil.)
+Wrong assumption: That "who a press right now would page" is the same list as "who this alert paged", so
+                  the reopened page could start from the ranking and let the poll add names. It is never the
+                  same list once the alert has started: the ranking learns from every page, so the three who
+                  were just paged and have not answered drop, Sunil rises, and the page opened on
+                  *Vaishali, Sunil, Ravi* and then unioned the row's *Vaishali, Ravi, Anil*. Check 15 opened
+                  the page too — before the rows had landed, so it never saw the difference.
+Fix:              821a19e — reopened during an alert, `trigger_page` starts from `told_names(running)`
+                  (the delivered rows, minus anyone who stepped back), falling back to the ranking only
+                  while no row exists yet. Check 15 now waits for the rows and asserts the page's names
+                  equal the reached set exactly — no more, no fewer.
+Evidence:         Same alert shape after the fix (`8ed1e8d50174`): *Anil, Ravi and Vaishali have been told*
+                  (`docs/11-help-is-being-called.png`), three rows, three names. `./verify.sh` 19/19,
+                  `v-124207-*`: check 15 "names ['Anil', 'Ravi', 'Vaishali'] vs reached ['Anil', 'Ravi',
+                  'Vaishali']". The property in the README reads *never says less than the row knows*; it
+                  now says *never more, either*.
+
 ---
 
-## What the eight have in common (written 19 Sep 12:35 IST, after the last entry)
+## What the nine have in common (written 19 Sep 12:35 IST after the eighth entry; the ninth added 12:55)
 
-Five of the eight were a word I trusted: `NONE` "means public", a poll after a Wait is
+Six of the nine were a word I trusted: `NONE` "means public", a poll after a Wait is
 "immediate", a meta refresh is "the page refreshing itself", an id that is safe to *read*
-by is "safe to act by", reseeding *before* a run "protects the button". In each case the
+by is "safe to act by", reseeding *before* a run "protects the button", the people "told" are the people a press "would tell". In each case the
 word described what I wanted and not what the system does, and the fix began with one
 command that showed the difference (`curl` against the URL, the cancel's timestamp beside
 the tier boundary, a marker on `window`, the timeline link in a stranger's inbox, the
-ranking after a run). Two were about the checks themselves: a test that was green on an
+ranking after a run, three rows beside four names). Two were about the checks themselves: a test that was green on an
 empty log, and a reseed that protected the checks and not the thing they were checking —
 which is where the rule at the top of `verify.py` comes from: a check that would pass
 against nothing is not a check. One was statistics: a single ignored page is not
@@ -215,5 +239,5 @@ evidence, and a ranking needs a prior before it needs a cliff.
 
 What I would carry to the next build: a word like *public*, *immediate* or *safe* does
 not go into the README until a command has shown it; the check is written before the
-feature when the feature is a promise about behaviour; and the tools that found two of
-the eight — axe and Lighthouse — run on the first day, not the last night.
+feature when the feature is a promise about behaviour; and the tools that found three of
+the nine — axe, Lighthouse, and a screenshot taken the way she would open the page — run on the first day, not the last night.
