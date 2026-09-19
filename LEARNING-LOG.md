@@ -197,7 +197,7 @@ Evidence:         Same document, no reload: a marker set on `window` at load sur
                   the way*, *cancelled*, the check-in ask and counted pages, the leave page, the timeline open /
                   claimed / cancelled, the 404. `./verify.sh` 18/18, `v-011325-*`.
 
-## 2026-09-19 12:50 IST — her screen, reopened during an alert, named a man who was never told
+## 2026-09-19 12:48 IST — her screen, reopened during an alert, named a man who was never told
 Tried:            Screenshots of her page through one real alert for the README — the one set of screens
                   it did not have: after the press, when someone answers. Each taken by opening the page
                   fresh while the alert ran, as she would if she put the phone down and picked it up.
