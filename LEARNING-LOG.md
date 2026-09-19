@@ -251,19 +251,62 @@ Evidence:         Before: 18/20 with the fix eight seconds old (IAM was still pr
                   topic published 4 (was 1)*; `simulate-principal-policy` for `pukaar-lambda` on the
                   configuration-set ARN → allowed.
 
+## 2026-09-19 21:55 IST — a second reader found what twenty checks by one author could not
+Tried:            Handing the repo to a reviewer that had never seen it (Cursor, read-only, told to report
+                  `file:line` with a way to confirm and to skip style and feature ideas) while the code was
+                  frozen and the film waited for 2 am.  
+Broke:            Five real things, every one on a path the checks never walked. A claim or a cancel after the
+                  last circle: the machine is past its last wait, so `wake()` handed back a stale token and
+                  nobody else was told (`web.py` `claim`, `cancel`). Worse, a claim landing in the second
+                  between `CheckClaim`'s read and `FinalFallback`'s conditional write threw, the spine
+                  `Catch` ran `RecordFailure`, and its unconditional write turned a won alert into `FAILED`
+                  with her screen stuck on *waiting*. Two presses in the same instant: `trigger` read
+                  `open_incident`, started a machine, then wrote the pointer with no condition, so both
+                  read "nothing running" and both paged her circle. `POST /cancel` with a body that was not
+                  JSON, or a key that was not ASCII, was an unhandled exception (`json.loads` bare,
+                  `hmac.compare_digest` on `str`), and since 20:35 an unhandled exception on `pukaar-web`
+                  pages the operator. A step-back that started no machine would have left the alert `OPEN`
+                  with nobody waiting on it. (And `json.dumps` into her page's `<script>` does not escape
+                  `</`; only seeded names reach it, so harmless, but fixed.)  
+Wrong assumption: That the checks covered the machine's endings because they covered its states. Every claim
+                  and cancel in checks 3, 6 and 11 happened mid-wait, with a live token; check 15 pressed
+                  twice in sequence, never at once; check 6 sent a well-formed body with a wrong key, never a
+                  malformed one. I tested the paths I had imagined, and I had imagined the ones I built.  
+Fix:              09e67c2 — a claim or a cancel on a `FALLBACK` row invokes `broadcast` itself (the machine
+                  will not); `broadcast` treats a failed `no_one_reached` condition as "the row moved on" and
+                  sends what actually happened (`someone_going` or `false_alarm`) instead of throwing;
+                  `record_failure` sets `FAILED` only over `OPEN`/`FALLBACK` and records the reason beside a
+                  claim otherwise; her page shows the 112 screen on `FAILED`. `trigger` reads her row once,
+                  takes it with a condition on that same value before any machine starts, and a pointer to a
+                  row that does not exist yet counts as a running press for thirty seconds (the first version
+                  of the fix read twice and still made two alerts: 20/21, `v-220803-*`). `cancel` answers a
+                  bad body with 400; `hers()` compares bytes. `release` puts the claim back if
+                  `StartExecution` fails. `js()` escapes `</` in anything rendered into a script. Check 21
+                  does all of it on the live stack: a late claim on the `FALLBACK` alert from check 18 and a
+                  cancel on the one from check 4, both broadcast to everyone reached; two presses from two
+                  threads → one alert; `not-json` → 400, `"é"` → 403.  
+Evidence:         The reviewer's own offline snippet before the fix: `cancel: JSONDecodeError`, `hers
+                  non-ascii: TypeError`; after: 400 and `False`. First deploy 22:08: **20/21**, check 21
+                  *two presses at once -> 2 alert (0 joined)*. Second deploy 22:13: **21/21**, `v-221423-*`,
+                  check 21 *late claim on FALLBACK … broadcast someone_going told 5 vs reached 5; cancel from
+                  FALLBACK … false_alarm told 5; two presses at once -> 1 alert (1 joined); bad body -> 400,
+                  non-ascii key -> 403*. Not a finding: the reviewer's claim that a second step-back leaves the
+                  first resumed execution waiting — a `CLAIMED` row means the claim already woke it.
+
 ---
 
-## What the ten have in common (written 19 Sep 12:35 IST after the eighth entry; the ninth added 12:55, the tenth 20:50)
+## What the eleven have in common (written 19 Sep 12:35 IST after the eighth entry; the ninth added 12:55, the tenth 20:50, the eleventh 22:19)
 
-Seven of the ten were a word I trusted: `NONE` "means public", a poll after a Wait is
+Seven of the eleven were a word I trusted: `NONE` "means public", a poll after a Wait is
 "immediate", a meta refresh is "the page refreshing itself", an id that is safe to *read*
 by is "safe to act by", reseeding *before* a run "protects the button", the people "told" are the people a press "would tell", a permission on "the identity"
 covers what the identity does. In each case the
 word described what I wanted and not what the system does, and the fix began with one
 command that showed the difference (`curl` against the URL, the cancel's timestamp beside
 the tier boundary, a marker on `window`, the timeline link in a stranger's inbox, the
-ranking after a run, three rows beside four names, one denied send in a Lambda's log). Two were about the checks themselves: a test that was green on an
-empty log, and a reseed that protected the checks and not the thing they were checking,
+ranking after a run, three rows beside four names, one denied send in a Lambda's log). Three were about the checks themselves: a test that was green on an
+empty log, a reseed that protected the checks and not the thing they were checking, and twenty-one
+checks that walked only the paths their author had imagined,
 which is where the rule at the top of `verify.py` comes from: a check that would pass
 against nothing is not a check. One was statistics: a single ignored page is not
 evidence, and a ranking needs a prior before it needs a cliff.
@@ -271,4 +314,4 @@ evidence, and a ranking needs a prior before it needs a cliff.
 What I would carry to the next build: a word like *public*, *immediate* or *safe* does
 not go into the README until a command has shown it; the check is written before the
 feature when the feature is a promise about behaviour; and the tools that found three of
-the ten (axe, Lighthouse, and a screenshot taken the way she would open the page) run on the first day, not the last night. The tenth is the case for the live checks: a change that touched no code broke the one path that matters, and check 1 said so inside a minute.
+the eleven (axe, Lighthouse, and a screenshot taken the way she would open the page) run on the first day, not the last night. The tenth is the case for the live checks: a change that touched no code broke the one path that matters, and check 1 said so inside a minute. The eleventh is the case for a second reader: five defects in an hour, on paths the checks never walked, from someone who had not built them.
