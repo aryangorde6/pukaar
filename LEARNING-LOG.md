@@ -196,3 +196,24 @@ Evidence:         Same document, no reload: a marker set on `window` at load sur
                   the fix: 0 violations on her page in all six states, the alert, *You're going*, *already on
                   the way*, *cancelled*, the check-in ask and counted pages, the leave page, the timeline open /
                   claimed / cancelled, the 404. `./verify.sh` 18/18, `v-011325-*`.
+
+---
+
+## What the eight have in common (written 19 Sep 12:35 IST, after the last entry)
+
+Five of the eight were a word I trusted: `NONE` "means public", a poll after a Wait is
+"immediate", a meta refresh is "the page refreshing itself", an id that is safe to *read*
+by is "safe to act by", reseeding *before* a run "protects the button". In each case the
+word described what I wanted and not what the system does, and the fix began with one
+command that showed the difference (`curl` against the URL, the cancel's timestamp beside
+the tier boundary, a marker on `window`, the timeline link in a stranger's inbox, the
+ranking after a run). Two were about the checks themselves: a test that was green on an
+empty log, and a reseed that protected the checks and not the thing they were checking —
+which is where the rule at the top of `verify.py` comes from: a check that would pass
+against nothing is not a check. One was statistics: a single ignored page is not
+evidence, and a ranking needs a prior before it needs a cliff.
+
+What I would carry to the next build: a word like *public*, *immediate* or *safe* does
+not go into the README until a command has shown it; the check is written before the
+feature when the feature is a promise about behaviour; and the tools that found two of
+the eight — axe and Lighthouse — run on the first day, not the last night.
