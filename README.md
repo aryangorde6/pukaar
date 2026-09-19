@@ -86,7 +86,7 @@ Pukaar replaces the sequence with a fan-out. One press pages the three people mo
 9. **112 at the foot of every page.** The button is not a promise, and the page says so.
 10. **One column, 720 px at most, light only.** The same page on a phone, a laptop and a shared screen, and the same at three in the morning.
 
-Measured (19 Sep): Lighthouse 12.8 on her page, mobile — performance 100, accessibility 100, best practices 100; SEO 50 on purpose (`noindex`, no description: her button is not for search). The page is 40 KB of eleven languages, styles and script and is served gzipped, 11 KB, to any browser that accepts it — she may be opening it on one bar of signal.
+Measured (19 Sep): Lighthouse 12.8, mobile, on her page and on the timeline page of two closed alerts — performance 100, accessibility 100, best practices 100 on each; SEO 50 on purpose (`noindex`, no description: none of these pages is for search). The page is 40 KB of eleven languages, styles and script and is served gzipped, 11 KB, to any browser that accepts it — she may be opening it on one bar of signal.
 
 ### Correctness properties, stated
 

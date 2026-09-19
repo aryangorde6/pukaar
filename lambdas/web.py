@@ -1107,6 +1107,7 @@ def _page(title, body):
     return ("""<!doctype html><html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1"><meta name="robots" content="noindex">
 <meta name="color-scheme" content="only light">
+<link rel="icon" href="/icon-192.png" type="image/png">
 <title>""" + title + """</title><style>""" + STYLE + """</style></head><body>
 <main>
 """ + body + """
